@@ -1,0 +1,34 @@
+services:
+  odoo-backup:
+    build: .
+    image: odoo-backup:latest
+    restart: unless-stopped
+    # Lets running backups wind down and record their state on shutdown.
+    stop_grace_period: 30s
+    ports:
+      - "8080:8080"
+    environment:
+      # Address users open in their browser. Needed for Google OAuth and for links in notifications.
+      ODB_PUBLIC_URL: "http://localhost:8080"
+      # Set to "true" when served over HTTPS (behind a reverse proxy).
+      ODB_COOKIE_SECURE: "false"
+      # Runs executing at the same time (each buffers one backup on disk).
+      ODB_MAX_CONCURRENT_JOBS: "2"
+      # Optional: provide the encryption key instead of letting the app generate /data/secret.key.
+      # Generate one with: docker compose run --rm odoo-backup generate-key
+      # ODB_SECRET_KEY: ""
+      # Optional: create the first admin automatically instead of using the setup screen.
+      # ODB_ADMIN_USERNAME: "admin"
+      # ODB_ADMIN_PASSWORD: ""
+      # Optional: enable Prometheus metrics at /metrics (Authorization: Bearer <token>).
+      # ODB_METRICS_TOKEN: ""
+    volumes:
+      # Database, encryption key and temporary buffers. Back up this volume!
+      - odoo-backup-data:/data
+      # Target for "Local folder" destinations (use path /backups in the UI).
+      # Replace with a bind mount to a NAS/disk, e.g. /mnt/nas/odoo:/backups (owned by uid 10001).
+      - odoo-backup-files:/backups
+
+volumes:
+  odoo-backup-data:
+  odoo-backup-files:

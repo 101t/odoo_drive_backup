@@ -1,0 +1,7 @@
+/target
+/data
+/backups
+/frontend/node_modules
+/frontend/dist
+*.part
+.env
