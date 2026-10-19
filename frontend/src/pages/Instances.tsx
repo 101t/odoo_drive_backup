@@ -9,6 +9,7 @@ import { useConfirm } from "../components/confirm";
 import { StatusDot } from "../components/RunBits";
 import { useToast } from "../components/toast";
 import { Badge, Button, Card, EmptyState, IconButton, LoadingBlock, PageHeader } from "../components/ui";
+import { t, ts, useT } from "../i18n";
 import { timeAgo } from "../lib/format";
 import { InstanceForm } from "./InstanceForm";
 
@@ -23,31 +24,33 @@ export function useInstanceActions() {
     refresh: async (instance: Instance) => {
       try {
         const result = await refresh.mutateAsync(instance.id);
-        if (result.test.error) toast.error(`${instance.name} is unreachable`, result.test.error);
-        else toast.success(`${instance.name} refreshed`, `Odoo ${result.test.version} · ${result.test.databases.length} database(s)`);
+        if (result.test.error) toast.error(t("instances.unreachable", { name: instance.name }), ts(result.test.error));
+        else
+          toast.success(
+            t("instances.refreshed", { name: instance.name }),
+            t("instances.refreshed_hint", {
+              version: result.test.version ?? "",
+              databases: t("count.databases", { count: result.test.databases.length }),
+            }),
+          );
       } catch (error) {
-        toast.error("Refresh failed", errorMessage(error));
+        toast.error(t("instances.refresh_failed"), errorMessage(error));
       }
     },
     remove: async (instance: Instance) => {
       const { confirmed } = await confirm({
-        title: `Delete ${instance.name}?`,
-        message: (
-          <p>
-            Its {instance.job_count} backup job(s) are deleted too. Existing backup files are kept on their
-            destinations and remain visible in History.
-          </p>
-        ),
-        confirmLabel: "Delete instance",
+        title: t("instances.delete_title", { name: instance.name }),
+        message: <p>{t("instances.delete_message", { count: instance.job_count })}</p>,
+        confirmLabel: t("instances.delete_confirm"),
         danger: true,
       });
       if (!confirmed) return false;
       try {
         await remove.mutateAsync(instance.id);
-        toast.success(`${instance.name} deleted`);
+        toast.success(t("instances.deleted", { name: instance.name }));
         return true;
       } catch (error) {
-        toast.error("Cannot delete", errorMessage(error));
+        toast.error(t("common.cannot_delete"), errorMessage(error));
         return false;
       }
     },
@@ -55,6 +58,7 @@ export function useInstanceActions() {
 }
 
 export function InstancesPage() {
+  const t = useT();
   const { data: instances, isLoading } = useInstances();
   const [editing, setEditing] = useState<Instance | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -69,11 +73,11 @@ export function InstancesPage() {
   return (
     <>
       <PageHeader
-        title="Instances"
-        description="Odoo servers to back up. Databases are discovered automatically."
+        title={t("instances.title")}
+        description={t("instances.description")}
         actions={
           <Button variant="primary" icon={<Plus />} onClick={() => openForm(null)}>
-            Add instance
+            {t("instances.add")}
           </Button>
         }
       />
@@ -84,11 +88,11 @@ export function InstancesPage() {
         <Card>
           <EmptyState
             icon={<Server />}
-            title="No Odoo instance yet"
-            description="Add the URL of an Odoo server and its master password. Odoo 12 to 18 (Community and Enterprise) are supported, as long as the database manager is enabled."
+            title={t("instances.empty")}
+            description={t("instances.empty_hint")}
             action={
               <Button variant="primary" icon={<Plus />} onClick={() => openForm(null)}>
-                Add instance
+                {t("instances.add")}
               </Button>
             }
           />
@@ -101,47 +105,52 @@ export function InstancesPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <Link to={`/instances/${instance.id}`} className="block truncate font-semibold hover:underline">
-                      {instance.name}
+                      <bdi>{instance.name}</bdi>
                     </Link>
                     <a
                       href={instance.url}
                       target="_blank"
                       rel="noreferrer"
+                      dir="ltr"
                       className="inline-flex max-w-full items-center gap-1 truncate text-xs text-zinc-500 hover:text-brand-600"
                     >
                       <span className="truncate">{instance.url}</span>
                       <ExternalLink className="size-3 shrink-0" />
                     </a>
                   </div>
-                  {instance.odoo_version && <Badge tone="violet">Odoo {instance.odoo_version}</Badge>}
+                  {instance.odoo_version && (
+                    <Badge tone="violet">
+                      <bdi>Odoo {instance.odoo_version}</bdi>
+                    </Badge>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
                   {!instance.has_master_password && (
                     <Badge tone="amber">
-                      <ShieldAlert /> No master password
+                      <ShieldAlert /> {t("instances.no_password")}
                     </Badge>
                   )}
-                  {!instance.verify_tls && <Badge tone="amber">TLS not verified</Badge>}
+                  {!instance.verify_tls && <Badge tone="amber">{t("instances.tls_not_verified")}</Badge>}
                 </div>
 
                 {instance.last_check_error && (
-                  <p className="line-clamp-2 text-xs text-rose-600 dark:text-rose-400" title={instance.last_check_error}>
-                    {instance.last_check_error}
+                  <p className="line-clamp-2 text-xs text-rose-600 dark:text-rose-400" title={ts(instance.last_check_error)}>
+                    {ts(instance.last_check_error)}
                   </p>
                 )}
 
                 <dl className="grid grid-cols-3 gap-2 rounded-lg bg-zinc-50 p-3 text-center dark:bg-zinc-950/50">
                   <div>
-                    <dt className="text-[11px] uppercase tracking-wide text-zinc-500">Databases</dt>
+                    <dt className="text-[11px] uppercase tracking-wide text-zinc-500">{t("common.databases")}</dt>
                     <dd className="text-lg font-semibold tabular-nums">{instance.databases.length}</dd>
                   </div>
                   <div>
-                    <dt className="text-[11px] uppercase tracking-wide text-zinc-500">Jobs</dt>
+                    <dt className="text-[11px] uppercase tracking-wide text-zinc-500">{t("instances.jobs")}</dt>
                     <dd className="text-lg font-semibold tabular-nums">{instance.job_count}</dd>
                   </div>
                   <div>
-                    <dt className="text-[11px] uppercase tracking-wide text-zinc-500">Last backup</dt>
+                    <dt className="text-[11px] uppercase tracking-wide text-zinc-500">{t("instances.last_backup")}</dt>
                     <dd className="mt-1.5 flex items-center justify-center gap-1.5 text-xs">
                       <StatusDot status={instance.last_backup_status} />
                       {timeAgo(instance.last_backup_at)}
@@ -151,20 +160,20 @@ export function InstancesPage() {
               </div>
               <div className="flex items-center gap-1 border-t border-zinc-100 px-3 py-2 dark:border-zinc-800">
                 <Button size="sm" variant="ghost" icon={<Play />} onClick={() => setBackup(instance)}>
-                  Back up now
+                  {t("common.backup_now")}
                 </Button>
                 <div className="flex-1" />
                 <IconButton
-                  label="Refresh databases"
+                  label={t("instances.refresh")}
                   onClick={() => actions.refresh(instance)}
                   disabled={actions.refreshing === instance.id}
                 >
                   <RefreshCw className={actions.refreshing === instance.id ? "animate-spin" : undefined} />
                 </IconButton>
-                <IconButton label="Edit" onClick={() => openForm(instance)}>
+                <IconButton label={t("common.edit")} onClick={() => openForm(instance)}>
                   <Pencil />
                 </IconButton>
-                <IconButton label="Delete" tone="danger" onClick={() => actions.remove(instance)}>
+                <IconButton label={t("common.delete")} tone="danger" onClick={() => actions.remove(instance)}>
                   <Trash />
                 </IconButton>
               </div>

@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::valid_database_name;
-use crate::db::{JobRow, get_instance, get_job, status};
+use crate::db::{self, JobRow, get_instance, get_job, status};
 use crate::error::{ApiResult, AppError};
+use crate::i18n::Lang;
 use crate::odoo::BackupFormat;
 use crate::scheduler;
 use crate::state::AppState;
@@ -87,12 +88,12 @@ macro_rules! job_select {
     };
 }
 
-fn to_view(row: JobListRow, destination_ids: Vec<i64>) -> JobView {
+fn to_view(row: JobListRow, destination_ids: Vec<i64>, lang: Lang) -> JobView {
     let databases = row.job.databases();
     let j = row.job;
     JobView {
         id: j.id,
-        cron_description: scheduler::describe(&j.cron),
+        cron_description: scheduler::describe(&j.cron, lang),
         name: j.name,
         instance_id: j.instance_id,
         instance_name: row.instance_name,
@@ -120,7 +121,7 @@ fn to_view(row: JobListRow, destination_ids: Vec<i64>) -> JobView {
 
 async fn destinations_by_job(state: &AppState) -> sqlx::Result<HashMap<i64, Vec<i64>>> {
     let pairs: Vec<(i64, i64)> =
-        sqlx::query_as("SELECT job_id, destination_id FROM job_destinations ORDER BY job_id, destination_id")
+        db::query_as("SELECT job_id, destination_id FROM job_destinations ORDER BY job_id, destination_id")
             .fetch_all(&state.db)
             .await?;
     let mut map: HashMap<i64, Vec<i64>> = HashMap::new();
@@ -130,32 +131,32 @@ async fn destinations_by_job(state: &AppState) -> sqlx::Result<HashMap<i64, Vec<
     Ok(map)
 }
 
-async fn load_view(state: &AppState, id: i64) -> ApiResult<JobView> {
-    let row: JobListRow = sqlx::query_as(concat!(job_select!(), " WHERE j.id = ?"))
+async fn load_view(state: &AppState, id: i64, lang: Lang) -> ApiResult<JobView> {
+    let row: JobListRow = db::query_as(concat!(job_select!(), " WHERE j.id = ?"))
         .bind(id)
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| AppError::not_found("Job"))?;
     let mut map = destinations_by_job(state).await?;
-    Ok(to_view(row, map.remove(&id).unwrap_or_default()))
+    Ok(to_view(row, map.remove(&id).unwrap_or_default(), lang))
 }
 
-pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<JobView>>> {
+pub async fn list(State(state): State<AppState>, lang: Lang) -> ApiResult<Json<Vec<JobView>>> {
     let rows: Vec<JobListRow> =
-        sqlx::query_as(concat!(job_select!(), " ORDER BY j.name COLLATE NOCASE")).fetch_all(&state.db).await?;
+        db::query_as(concat!(job_select!(), " ORDER BY LOWER(j.name), j.id")).fetch_all(&state.db).await?;
     let mut map = destinations_by_job(&state).await?;
     Ok(Json(
         rows.into_iter()
             .map(|r| {
                 let ids = map.remove(&r.job.id).unwrap_or_default();
-                to_view(r, ids)
+                to_view(r, ids, lang)
             })
             .collect(),
     ))
 }
 
-pub async fn get_one(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<JobView>> {
-    Ok(Json(load_view(&state, id).await?))
+pub async fn get_one(State(state): State<AppState>, Path(id): Path<i64>, lang: Lang) -> ApiResult<Json<JobView>> {
+    Ok(Json(load_view(&state, id, lang).await?))
 }
 
 async fn validate(state: &AppState, input: &mut JobInput) -> ApiResult<()> {
@@ -190,7 +191,7 @@ async fn validate(state: &AppState, input: &mut JobInput) -> ApiResult<()> {
     }
     for id in &input.destination_ids {
         let exists: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM destinations WHERE id = ?").bind(id).fetch_one(&state.db).await?;
+            db::query_scalar("SELECT COUNT(*) FROM destinations WHERE id = ?").bind(id).fetch_one(&state.db).await?;
         if exists == 0 {
             return Err(AppError::bad_request(format!("Destination #{id} does not exist")));
         }
@@ -216,11 +217,15 @@ fn next_run_for(input: &JobInput) -> Option<DateTime<Utc>> {
     if input.enabled { scheduler::next_run(&input.cron, &input.timezone, Utc::now()).ok() } else { None }
 }
 
-pub async fn create(State(state): State<AppState>, Json(mut input): Json<JobInput>) -> ApiResult<Json<JobView>> {
+pub async fn create(
+    State(state): State<AppState>,
+    lang: Lang,
+    Json(mut input): Json<JobInput>,
+) -> ApiResult<Json<JobView>> {
     validate(&state, &mut input).await?;
     let ts = now();
     let mut tx = state.db.begin().await?;
-    let id: i64 = sqlx::query_scalar(
+    let id: i64 = db::query_scalar(
         "INSERT INTO jobs (name, instance_id, all_databases, databases_json, format, cron, timezone, enabled, \
          keep_last, keep_daily, keep_weekly, keep_monthly, keep_yearly, retries, verify_archive, next_run_at, \
          created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
@@ -243,29 +248,30 @@ pub async fn create(State(state): State<AppState>, Json(mut input): Json<JobInpu
     .bind(next_run_for(&input))
     .bind(ts)
     .bind(ts)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut tx)
     .await?;
     for destination_id in &input.destination_ids {
-        sqlx::query("INSERT INTO job_destinations (job_id, destination_id) VALUES (?, ?)")
+        db::query("INSERT INTO job_destinations (job_id, destination_id) VALUES (?, ?)")
             .bind(id)
             .bind(destination_id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await?;
     }
     tx.commit().await?;
     state.scheduler_wake.notify_one();
-    Ok(Json(load_view(&state, id).await?))
+    Ok(Json(load_view(&state, id, lang).await?))
 }
 
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    lang: Lang,
     Json(mut input): Json<JobInput>,
 ) -> ApiResult<Json<JobView>> {
     get_job(&state.db, id).await?;
     validate(&state, &mut input).await?;
     let mut tx = state.db.begin().await?;
-    sqlx::query(
+    db::query(
         "UPDATE jobs SET name = ?, instance_id = ?, all_databases = ?, databases_json = ?, format = ?, cron = ?, \
          timezone = ?, enabled = ?, keep_last = ?, keep_daily = ?, keep_weekly = ?, keep_monthly = ?, \
          keep_yearly = ?, retries = ?, verify_archive = ?, next_run_at = ?, updated_at = ? WHERE id = ?",
@@ -288,23 +294,23 @@ pub async fn update(
     .bind(next_run_for(&input))
     .bind(now())
     .bind(id)
-    .execute(&mut *tx)
+    .execute(&mut tx)
     .await?;
-    sqlx::query("DELETE FROM job_destinations WHERE job_id = ?").bind(id).execute(&mut *tx).await?;
+    db::query("DELETE FROM job_destinations WHERE job_id = ?").bind(id).execute(&mut tx).await?;
     for destination_id in &input.destination_ids {
-        sqlx::query("INSERT INTO job_destinations (job_id, destination_id) VALUES (?, ?)")
+        db::query("INSERT INTO job_destinations (job_id, destination_id) VALUES (?, ?)")
             .bind(id)
             .bind(destination_id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await?;
     }
     tx.commit().await?;
     state.scheduler_wake.notify_one();
-    Ok(Json(load_view(&state, id).await?))
+    Ok(Json(load_view(&state, id, lang).await?))
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
-    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE job_id = ? AND status IN (?, ?)")
+    let active: i64 = db::query_scalar("SELECT COUNT(*) FROM runs WHERE job_id = ? AND status IN (?, ?)")
         .bind(id)
         .bind(status::QUEUED)
         .bind(status::RUNNING)
@@ -313,7 +319,7 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
     if active > 0 {
         return Err(AppError::Conflict("This job has runs in progress; wait or cancel them first".into()));
     }
-    let deleted = sqlx::query("DELETE FROM jobs WHERE id = ?").bind(id).execute(&state.db).await?;
+    let deleted = db::query("DELETE FROM jobs WHERE id = ?").bind(id).execute(&state.db).await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("Job"));
     }
@@ -342,9 +348,9 @@ fn utc() -> String {
     "UTC".into()
 }
 
-pub async fn cron_preview(Json(input): Json<CronPreviewInput>) -> Json<Value> {
+pub async fn cron_preview(lang: Lang, Json(input): Json<CronPreviewInput>) -> Json<Value> {
     match scheduler::upcoming(&input.cron, &input.timezone, Utc::now(), 5) {
-        Ok(next) => Json(json!({ "valid": true, "description": scheduler::describe(&input.cron), "next": next })),
+        Ok(next) => Json(json!({ "valid": true, "description": scheduler::describe(&input.cron, lang), "next": next })),
         Err(err) => Json(json!({ "valid": false, "error": err.to_string(), "next": [] })),
     }
 }

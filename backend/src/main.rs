@@ -6,6 +6,7 @@ mod db;
 mod engine;
 mod error;
 mod events;
+mod i18n;
 mod notify;
 mod odoo;
 mod scheduler;
@@ -27,6 +28,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 use crate::crypto::Crypto;
+use crate::db::Db;
 use crate::engine::Engine;
 use crate::events::EventBus;
 use crate::notify::Notifier;
@@ -93,11 +95,11 @@ async fn healthcheck(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn open_database(config: &Config) -> anyhow::Result<(sqlx::SqlitePool, Arc<Crypto>)> {
+async fn open_database(config: &Config) -> anyhow::Result<(Db, Arc<Crypto>)> {
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("creating data directory {}", config.data_dir.display()))?;
     let crypto = Arc::new(Crypto::load_or_create(config.secret_key.as_deref(), &config.data_dir)?);
-    let pool = db::connect(&config.database_path()).await?;
+    let pool = db::connect(config.database_url.as_deref(), &config.database_path()).await?;
 
     // Detect a key that does not match the one used to encrypt the stored secrets.
     match db::get_setting(&pool, "key_check").await? {
@@ -117,6 +119,7 @@ async fn open_database(config: &Config) -> anyhow::Result<(sqlx::SqlitePool, Arc
 async fn serve(config: Config) -> anyhow::Result<()> {
     let config = Arc::new(config);
     let (pool, crypto) = open_database(&config).await?;
+    let _claim = pool.claim().await?;
     let temp_dir = config.temp_dir();
     std::fs::create_dir_all(&temp_dir).with_context(|| format!("creating temp directory {}", temp_dir.display()))?;
 
@@ -154,6 +157,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tracing::info!(
         address = %config.bind,
         data_dir = %config.data_dir.display(),
+        database = pool.engine(),
         version = env!("CARGO_PKG_VERSION"),
         "Odoo Backup is listening"
     );
@@ -173,18 +177,18 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn bootstrap_admin(pool: &sqlx::SqlitePool, config: &Config) -> anyhow::Result<()> {
+async fn bootstrap_admin(pool: &Db, config: &Config) -> anyhow::Result<()> {
     let (Some(username), Some(password)) = (&config.admin_username, &config.admin_password) else {
         return Ok(());
     };
-    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(pool).await?;
+    let users: i64 = db::query_scalar("SELECT COUNT(*) FROM users").fetch_one(pool).await?;
     if users > 0 {
         return Ok(());
     }
     auth::validate_username(username).map_err(|e| anyhow::anyhow!("ODB_ADMIN_USERNAME: {e}"))?;
     auth::validate_password(password).map_err(|e| anyhow::anyhow!("ODB_ADMIN_PASSWORD: {e}"))?;
     let hash = auth::hash_password(password)?;
-    sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
+    db::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
         .bind(username)
         .bind(hash)
         .bind(util::now())
@@ -203,14 +207,14 @@ async fn reset_password(config: Config, username: String) -> anyhow::Result<()> 
     let password = password.trim_end_matches(['\r', '\n']);
     auth::validate_password(password).map_err(|e| anyhow::anyhow!("{e}"))?;
     let hash = auth::hash_password(password)?;
-    let updated = sqlx::query("UPDATE users SET password_hash = ? WHERE username = ?")
+    let updated = db::query("UPDATE users SET password_hash = ? WHERE LOWER(username) = LOWER(?)")
         .bind(&hash)
         .bind(&username)
         .execute(&pool)
         .await?
         .rows_affected();
     if updated == 0 {
-        sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
+        db::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
             .bind(&username)
             .bind(&hash)
             .bind(util::now())
@@ -218,7 +222,7 @@ async fn reset_password(config: Config, username: String) -> anyhow::Result<()> 
             .await?;
         eprintln!("Created user \"{username}\".");
     } else {
-        sqlx::query("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE username = ?)")
+        db::query("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE LOWER(username) = LOWER(?))")
             .bind(&username)
             .execute(&pool)
             .await?;

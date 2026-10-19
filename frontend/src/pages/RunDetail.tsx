@@ -7,7 +7,7 @@ import { useCancelRun, useDeleteArtifact, useDeleteRun, useRun } from "../api/ho
 import type { Artifact, RunLog } from "../api/types";
 import { useConfirm } from "../components/confirm";
 import { RestoreDialog } from "../components/RestoreDialog";
-import { DestinationIcon, RunProgress, StatusBadge } from "../components/RunBits";
+import { DestinationIcon, RunProgress, StatusBadge, artifactStatusLabel, deleteReasonLabel } from "../components/RunBits";
 import { useToast } from "../components/toast";
 import {
   Alert,
@@ -23,10 +23,12 @@ import {
   Mono,
   PageHeader,
 } from "../components/ui";
-import { formatBytes, formatDateTime, formatDuration, runDurationMs } from "../lib/format";
+import { ts, useT } from "../i18n";
+import { formatBytes, formatDateTime, formatDuration, formatTime, runDurationMs } from "../lib/format";
 import { useNow } from "../lib/live";
 
 function LogView({ logs }: { logs: RunLog[] }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -45,19 +47,22 @@ function LogView({ logs }: { logs: RunLog[] }) {
       className="scrollbar-thin max-h-[28rem] overflow-y-auto rounded-b-xl bg-zinc-950 p-4 font-mono text-xs leading-relaxed text-zinc-300"
     >
       {logs.length === 0 ? (
-        <p className="text-zinc-500">No log yet.</p>
+        <p className="text-zinc-500">{t("run_detail.no_log")}</p>
       ) : (
         logs.map((log) => (
           <div key={log.id} className="flex gap-3">
-            <span className="shrink-0 text-zinc-500">{new Date(log.ts).toLocaleTimeString()}</span>
+            <span className="shrink-0 text-zinc-500" dir="ltr">
+              {formatTime(log.ts)}
+            </span>
             <span
+              dir="auto"
               className={clsx(
-                "min-w-0 break-words",
+                "min-w-0 break-words rtl:font-sans",
                 log.level === "error" && "text-rose-400",
                 log.level === "warn" && "text-amber-300",
               )}
             >
-              {log.message}
+              {ts(log.message)}
             </span>
           </div>
         ))
@@ -76,6 +81,7 @@ const artifactTone = {
 } as const;
 
 export function RunDetailPage() {
+  const t = useT();
   const id = Number(useParams().id);
   const { data, isLoading, error } = useRun(id);
   const cancel = useCancelRun();
@@ -89,97 +95,118 @@ export function RunDetailPage() {
 
   if (isLoading) return <LoadingBlock />;
   if (error || !data) {
-    return <EmptyState icon={<CircleX />} title="Run not found" action={<Link to="/runs">Back to history</Link>} />;
+    return (
+      <EmptyState
+        icon={<CircleX />}
+        title={t("run_detail.not_found")}
+        action={<Link to="/runs">{t("run_detail.back")}</Link>}
+      />
+    );
   }
   const { run, logs, restore_options: restore } = data;
   const active = run.status === "queued" || run.status === "running";
 
   const onCancel = async () => {
     const { confirmed } = await confirm({
-      title: "Cancel this run?",
-      message: "The transfer stops and temporary files are removed. Partial uploads are discarded.",
-      confirmLabel: "Cancel run",
+      title: t("run_detail.cancel_title"),
+      message: t("run_detail.cancel_message"),
+      confirmLabel: t("run_detail.cancel_confirm"),
       danger: true,
     });
     if (!confirmed) return;
     try {
       await cancel.mutateAsync(run.id);
     } catch (e) {
-      toast.error("Cannot cancel", errorMessage(e));
+      toast.error(t("run_detail.cancel_failed"), errorMessage(e));
     }
   };
 
   const onDelete = async () => {
     const stored = run.artifacts.filter((a) => a.status === "stored").length;
     const { confirmed, checked } = await confirm({
-      title: `Delete run #${run.id}?`,
-      message: "The run and its logs are removed from the history.",
-      checkbox: stored > 0 ? `Also delete the ${stored} stored backup file(s) from their destinations` : undefined,
+      title: t("run_detail.delete_title", { id: run.id }),
+      message: t("run_detail.delete_message"),
+      checkbox: stored > 0 ? t("run_detail.delete_files", { count: stored }) : undefined,
       checkboxDefault: false,
-      confirmLabel: "Delete",
+      confirmLabel: t("common.delete"),
       danger: true,
     });
     if (!confirmed) return;
     try {
       await deleteRun.mutateAsync({ id: run.id, deleteFiles: checked });
-      toast.success(`Run #${run.id} deleted`);
+      toast.success(t("run_detail.deleted", { id: run.id }));
       navigate("/runs");
     } catch (e) {
-      toast.error("Cannot delete", errorMessage(e));
+      toast.error(t("common.cannot_delete"), errorMessage(e));
     }
   };
 
   const onDeleteArtifact = async (artifact: Artifact) => {
     const { confirmed } = await confirm({
-      title: "Delete this backup file?",
-      message: `The file is permanently removed from ${artifact.destination_name}.`,
-      confirmLabel: "Delete file",
+      title: t("run_detail.delete_file_title"),
+      message: t("run_detail.delete_file_message", { destination: artifact.destination_name }),
+      confirmLabel: t("run_detail.delete_file"),
       danger: true,
     });
     if (!confirmed) return;
     try {
       await deleteArtifact.mutateAsync(artifact.id);
-      toast.success("File deleted");
+      toast.success(t("run_detail.file_deleted"));
     } catch (e) {
-      toast.error("Cannot delete the file", errorMessage(e));
+      toast.error(t("run_detail.delete_file_failed"), errorMessage(e));
     }
   };
 
   const summary: [ReactNode, ReactNode][] = [
-    ["Instance", run.instance_id ? <Link to={`/instances/${run.instance_id}`} className="hover:underline">{run.instance_name}</Link> : run.instance_name],
-    ["Database", run.database],
     [
-      run.kind === "restore" ? "Source" : "Job",
+      t("run_detail.instance"),
+      run.instance_id ? (
+        <Link to={`/instances/${run.instance_id}`} className="hover:underline">
+          <bdi>{run.instance_name}</bdi>
+        </Link>
+      ) : (
+        <bdi>{run.instance_name}</bdi>
+      ),
+    ],
+    [t("common.database"), <bdi>{run.database}</bdi>],
+    [
+      run.kind === "restore" ? t("run_detail.source") : t("run_detail.job"),
       run.kind === "restore" && restore ? (
         <Link to={`/runs/${restore.source_run_id}`} className="hover:underline">
-          {restore.source_instance} / {restore.source_database} (run #{restore.source_run_id})
+          {t("run_detail.source_value", {
+            instance: restore.source_instance,
+            database: restore.source_database,
+            id: restore.source_run_id,
+          })}
         </Link>
       ) : run.job_id ? (
         <Link to={`/runs?job_id=${run.job_id}`} className="hover:underline">
-          {run.job_name}
+          <bdi>{run.job_name}</bdi>
         </Link>
       ) : (
-        "Manual backup"
+        t("run_detail.manual_backup")
       ),
     ],
-    ["Trigger", run.trigger === "schedule" ? "Scheduled" : "Manual"],
-    ["Format", run.format === "zip" ? "ZIP (dump + filestore)" : "PostgreSQL dump"],
-    ["Odoo version", run.odoo_version ?? "—"],
-    ["Created", formatDateTime(run.created_at)],
-    ["Duration", formatDuration(runDurationMs(run, now))],
-    ["Size", formatBytes(run.size_bytes)],
-    ["Attempts", run.attempt || "—"],
+    [t("run_detail.trigger"), run.trigger === "schedule" ? t("run_detail.scheduled") : t("run_detail.manual")],
+    [t("common.format"), run.format === "zip" ? t("run_detail.format_zip") : t("run_detail.format_dump")],
+    [t("run_detail.odoo_version"), run.odoo_version ? <bdi>{run.odoo_version}</bdi> : "—"],
+    [t("run_detail.created"), formatDateTime(run.created_at)],
+    [t("runs.col_duration"), formatDuration(runDurationMs(run, now))],
+    [t("common.size"), formatBytes(run.size_bytes)],
+    [t("run_detail.attempts"), run.attempt || "—"],
   ];
   if (restore) {
     summary.push([
-      "Options",
+      t("run_detail.options"),
       <span className="flex flex-wrap gap-1">
-        <Badge tone={restore.copy ? "violet" : "amber"}>{restore.copy ? "copy (new UUID)" : "same UUID"}</Badge>
-        {restore.neutralize && <Badge tone="blue">neutralized</Badge>}
+        <Badge tone={restore.copy ? "violet" : "amber"}>
+          {restore.copy ? t("run_detail.copy_new_uuid") : t("run_detail.same_uuid")}
+        </Badge>
+        {restore.neutralize && <Badge tone="blue">{t("run_detail.neutralized")}</Badge>}
       </span>,
     ]);
   }
-  if (run.file_name) summary.push(["File", <Mono>{run.file_name}</Mono>]);
+  if (run.file_name) summary.push([t("run_detail.file"), <Mono>{run.file_name}</Mono>]);
   if (run.sha256)
     summary.push([
       "SHA-256",
@@ -194,25 +221,32 @@ export function RunDetailPage() {
     <>
       <PageHeader
         back={
-          <Link to="/runs" className="mb-2 inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
-            <ArrowLeft className="size-4" /> History
+          <Link
+            to="/runs"
+            className="mb-2 inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            <ArrowLeft className="size-4 rtl:rotate-180" /> {t("nav.history")}
           </Link>
         }
         title={
           <span className="flex items-center gap-3">
-            {run.kind === "restore" ? "Restore" : "Backup"} #{run.id}
+            {run.kind === "restore" ? t("run_detail.restore_title", { id: run.id }) : t("run_detail.backup_title", { id: run.id })}
             <StatusBadge status={run.status} />
           </span>
         }
-        description={`${run.instance_name} / ${run.database}`}
+        description={
+          <bdi>
+            {run.instance_name} / {run.database}
+          </bdi>
+        }
         actions={
           active ? (
             <Button variant="danger" icon={<Square />} onClick={onCancel} loading={cancel.isPending}>
-              Cancel
+              {t("common.cancel")}
             </Button>
           ) : (
             <Button icon={<Trash />} onClick={onDelete}>
-              Delete
+              {t("common.delete")}
             </Button>
           )
         }
@@ -220,29 +254,33 @@ export function RunDetailPage() {
 
       <div className="space-y-6">
         {run.error && run.status !== "cancelled" && (
-          <Alert tone={run.status === "partial" ? "amber" : "red"} icon={<CircleX />} title={run.status === "partial" ? "Completed with problems" : "Failed"}>
-            {run.error}
+          <Alert
+            tone={run.status === "partial" ? "amber" : "red"}
+            icon={<CircleX />}
+            title={run.status === "partial" ? t("run_detail.partial") : t("status.failed")}
+          >
+            {ts(run.error)}
           </Alert>
         )}
 
         {active && (
-          <Card title="Progress">
+          <Card title={t("run_detail.progress")}>
             <RunProgress run={run} />
           </Card>
         )}
 
-        <div className="grid gap-6 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
           <div className="space-y-6 xl:col-span-2">
-            <Card title="Summary">
+            <Card title={t("run_detail.summary")}>
               <KeyValue items={summary} />
             </Card>
           </div>
 
           <div className="space-y-6 xl:col-span-3">
             {run.kind === "backup" && (
-              <Card title="Stored copies" padded={false}>
+              <Card title={t("run_detail.stored_copies")} padded={false}>
                 {run.artifacts.length === 0 ? (
-                  <p className="px-5 py-6 text-center text-sm text-zinc-500">No destination.</p>
+                  <p className="px-5 py-6 text-center text-sm text-zinc-500">{t("run_detail.no_destination")}</p>
                 ) : (
                   <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
                     {run.artifacts.map((a) => (
@@ -250,10 +288,10 @@ export function RunDetailPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <DestinationIcon kind={a.destination_kind} className="shrink-0 text-zinc-500" />
-                            <span className="truncate text-sm font-medium">{a.destination_name}</span>
+                            <bdi className="truncate text-sm font-medium">{a.destination_name}</bdi>
                           </div>
                           {a.remote_path && (
-                            <p className="mt-0.5 truncate text-xs text-zinc-500" title={a.remote_path}>
+                            <p className="mt-0.5 truncate text-xs text-zinc-500" title={a.remote_path} dir="ltr">
                               {a.remote_path}
                             </p>
                           )}
@@ -264,28 +302,28 @@ export function RunDetailPage() {
                                 a.status === "failed" ? "text-rose-600 dark:text-rose-400" : "text-zinc-500",
                               )}
                             >
-                              {a.error}
+                              {ts(a.error)}
                             </p>
                           )}
                         </div>
                         <Badge tone={artifactTone[a.status]}>
-                          {a.status}
-                          {a.delete_reason ? ` (${a.delete_reason})` : ""}
+                          {artifactStatusLabel(a.status)}
+                          {a.delete_reason ? ` (${deleteReasonLabel(a.delete_reason)})` : ""}
                         </Badge>
                         {a.status === "stored" && (
                           <div className="flex shrink-0 gap-0.5">
                             {a.web_url && (
-                              <IconLink label="Open in Google Drive" href={a.web_url} external>
+                              <IconLink label={t("run_detail.open_drive")} href={a.web_url} external>
                                 <ExternalLink />
                               </IconLink>
                             )}
-                            <IconLink label="Download" href={`/api/artifacts/${a.id}/download`} download>
+                            <IconLink label={t("run_detail.download")} href={`/api/artifacts/${a.id}/download`} download>
                               <Download />
                             </IconLink>
-                            <IconButton label="Restore…" onClick={() => setRestoreFrom(a)}>
+                            <IconButton label={t("run_detail.restore")} onClick={() => setRestoreFrom(a)}>
                               <RotateCcw />
                             </IconButton>
-                            <IconButton label="Delete file" tone="danger" onClick={() => onDeleteArtifact(a)}>
+                            <IconButton label={t("run_detail.delete_file")} tone="danger" onClick={() => onDeleteArtifact(a)}>
                               <Trash />
                             </IconButton>
                           </div>
@@ -297,7 +335,7 @@ export function RunDetailPage() {
               </Card>
             )}
 
-            <Card title="Log" padded={false}>
+            <Card title={t("run_detail.log")} padded={false}>
               <LogView logs={logs} />
             </Card>
           </div>

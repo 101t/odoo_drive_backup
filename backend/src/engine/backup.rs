@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow, bail};
 use tokio_util::sync::CancellationToken;
 
 use super::{EngineInner, Outcome, TempFile, retention, verify};
-use crate::db::{Artifact, Run, get_destination, get_instance, get_job, run_artifacts, status};
+use crate::db::{self, Artifact, Run, get_destination, get_instance, get_job, run_artifacts, status};
 use crate::odoo::{BackupFormat, DownloadStats, OdooClient, OdooError};
 use crate::storage::{Storage, StoredObject, UploadRequest};
 use crate::util::{Cancelled, available_space, format_bytes, format_duration, format_rate, is_cancelled, now, slugify};
@@ -34,7 +34,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
         now().format("%Y-%m-%d_%H-%M-%S"),
         format.as_str()
     );
-    sqlx::query("UPDATE runs SET file_name = ? WHERE id = ?").bind(&file_name).bind(run.id).execute(&engine.db).await?;
+    db::query("UPDATE runs SET file_name = ? WHERE id = ?").bind(&file_name).bind(run.id).execute(&engine.db).await?;
 
     let temp_dir = engine.config.temp_dir();
     tokio::fs::create_dir_all(&temp_dir)
@@ -62,7 +62,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
     let mut attempt: u32 = 0;
     let stats: DownloadStats = loop {
         attempt += 1;
-        let _ = sqlx::query("UPDATE runs SET attempt = ? WHERE id = ?")
+        let _ = db::query("UPDATE runs SET attempt = ? WHERE id = ?")
             .bind(attempt as i64)
             .bind(run.id)
             .execute(&engine.db)
@@ -100,7 +100,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
             Err(err) => return Err(err.into()),
         }
     };
-    sqlx::query("UPDATE runs SET size_bytes = ?, sha256 = ?, md5 = ? WHERE id = ?")
+    db::query("UPDATE runs SET size_bytes = ?, sha256 = ?, md5 = ? WHERE id = ?")
         .bind(stats.size as i64)
         .bind(&stats.sha256)
         .bind(&stats.md5)
@@ -122,7 +122,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
     .context("archive verification failed")?;
     engine.log(run.id, "info", report.summary()).await;
     if let Some(version) = &report.odoo_version {
-        let _ = sqlx::query("UPDATE runs SET odoo_version = ? WHERE id = ?")
+        let _ = db::query("UPDATE runs SET odoo_version = ? WHERE id = ?")
             .bind(version)
             .bind(run.id)
             .execute(&engine.db)
@@ -142,7 +142,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
         match upload_one(engine, run, artifact, &temp_path, &stats, &file_name, &folder, format, cancel).await {
             Ok(object) => {
                 stored += 1;
-                sqlx::query(
+                db::query(
                     "UPDATE artifacts SET status = ?, remote_id = ?, remote_path = ?, web_url = ?, size_bytes = ?, \
                      stored_at = ?, error = NULL WHERE id = ?",
                 )
@@ -163,7 +163,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
             Err(err) => {
                 failed.push(artifact.destination_name.clone());
                 let message = format!("{err:#}");
-                let _ = sqlx::query("UPDATE artifacts SET status = ?, error = ? WHERE id = ?")
+                let _ = db::query("UPDATE artifacts SET status = ?, error = ? WHERE id = ?")
                     .bind(status::ARTIFACT_FAILED)
                     .bind(&message)
                     .bind(artifact.id)
@@ -207,7 +207,7 @@ async fn upload_one(
     let destination = get_destination(&engine.db, destination_id).await?;
     let storage = Storage::open(&destination, &engine.crypto, &engine.storage)?;
 
-    sqlx::query("UPDATE artifacts SET status = ? WHERE id = ?")
+    db::query("UPDATE artifacts SET status = ? WHERE id = ?")
         .bind(status::ARTIFACT_UPLOADING)
         .bind(artifact.id)
         .execute(&engine.db)
@@ -238,7 +238,7 @@ async fn check_free_space(engine: &Arc<EngineInner>, run: &Run, temp_dir: &std::
     let Some(free) = available_space(temp_dir) else {
         return Ok(());
     };
-    let previous: Option<i64> = sqlx::query_scalar(
+    let previous: Option<i64> = db::query_scalar(
         "SELECT size_bytes FROM runs WHERE instance_id = ? AND database = ? AND kind = 'backup' \
          AND status IN (?, ?) AND size_bytes IS NOT NULL ORDER BY id DESC LIMIT 1",
     )

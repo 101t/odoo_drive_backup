@@ -9,10 +9,13 @@ use crate::auth::{
     AuthUser, SESSION_COOKIE, clear_cookie, cookie_value, create_session, current_user, delete_session, dummy_verify,
     hash_password, session_cookie, validate_password, validate_username, verify_password,
 };
-use crate::db::UserRow;
+use crate::db::{self, UserRow};
 use crate::error::{ApiResult, AppError};
 use crate::state::AppState;
 use crate::util::now;
+
+/// Advisory lock key serializing first-run setups (PostgreSQL).
+const SETUP_LOCK: i64 = 0x6f64_6f6f_7365_7475;
 
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -27,7 +30,7 @@ pub struct PasswordChange {
 }
 
 pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<serde_json::Value>> {
-    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&state.db).await?;
+    let users: i64 = db::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&state.db).await?;
     let user = current_user(&state.db, &headers).await?;
     Ok(Json(json!({
         "setup_required": users == 0,
@@ -45,20 +48,21 @@ pub async fn setup(State(state): State<AppState>, Json(input): Json<Credentials>
         .await
         .map_err(|e| AppError::Internal(e.into()))??;
     // Atomic: only succeeds while no user exists.
-    let inserted = sqlx::query(
-        "INSERT INTO users (username, password_hash, created_at) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)",
+    let mut tx = state.db.begin().await?;
+    tx.serialize(SETUP_LOCK).await?;
+    let id: Option<i64> = db::query_scalar(
+        "INSERT INTO users (username, password_hash, created_at) SELECT ?, ?, ? \
+         WHERE NOT EXISTS (SELECT 1 FROM users) RETURNING id",
     )
     .bind(&username)
     .bind(hash)
     .bind(now())
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    if inserted == 0 {
+    .fetch_optional(&mut tx)
+    .await?;
+    tx.commit().await?;
+    let Some(id) = id else {
         return Err(AppError::Conflict("The initial setup has already been completed".into()));
-    }
-    let id: i64 =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = ?").bind(&username).fetch_one(&state.db).await?;
+    };
     tracing::info!(username = %username, "initial admin account created");
     signed_in(&state, AuthUser { id, username }).await
 }
@@ -67,7 +71,7 @@ pub async fn login(State(state): State<AppState>, Json(input): Json<Credentials>
     let key = input.username.trim().to_lowercase();
     state.limiter.check(&key)?;
 
-    let user: Option<UserRow> = sqlx::query_as("SELECT * FROM users WHERE username = ?")
+    let user: Option<UserRow> = db::query_as("SELECT * FROM users WHERE LOWER(username) = LOWER(?)")
         .bind(input.username.trim())
         .fetch_optional(&state.db)
         .await?;
@@ -117,7 +121,7 @@ pub async fn change_password(
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_password(&input.new_password)?;
     let stored: String =
-        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?").bind(user.id).fetch_one(&state.db).await?;
+        db::query_scalar("SELECT password_hash FROM users WHERE id = ?").bind(user.id).fetch_one(&state.db).await?;
     let (current, new) = (input.current_password.clone(), input.new_password.clone());
     let new_hash = tokio::task::spawn_blocking(move || {
         if verify_password(&current, &stored) { hash_password(&new).map(Some) } else { Ok(None) }
@@ -126,7 +130,7 @@ pub async fn change_password(
     .map_err(|e| AppError::Internal(e.into()))??
     .ok_or_else(|| AppError::bad_request("The current password is incorrect"))?;
 
-    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+    db::query("UPDATE users SET password_hash = ? WHERE id = ?")
         .bind(new_hash)
         .bind(user.id)
         .execute(&state.db)
@@ -134,7 +138,7 @@ pub async fn change_password(
     // Sign out every other session of this user.
     let keep =
         cookie_value(&headers, SESSION_COOKIE).map(|t| crate::crypto::sha256_hex(t.as_bytes())).unwrap_or_default();
-    sqlx::query("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?")
+    db::query("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?")
         .bind(user.id)
         .bind(keep)
         .execute(&state.db)

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { useT } from "../i18n";
 import { Button, Checkbox, Modal } from "./ui";
 
 export interface ConfirmOptions {
@@ -21,6 +22,7 @@ type ConfirmFn = (options: ConfirmOptions) => Promise<ConfirmResult>;
 const ConfirmContext = createContext<ConfirmFn | null>(null);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const [checked, setChecked] = useState(false);
   const resolver = useRef<((result: ConfirmResult) => void) | null>(null);
@@ -49,9 +51,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         size="sm"
         footer={
           <>
-            <Button onClick={() => close(false)}>Cancel</Button>
+            <Button onClick={() => close(false)}>{t("common.cancel")}</Button>
             <Button variant={options?.danger ? "danger" : "primary"} onClick={() => close(true)} autoFocus>
-              {options?.confirmLabel ?? "Confirm"}
+              {options?.confirmLabel ?? t("common.confirm")}
             </Button>
           </>
         }

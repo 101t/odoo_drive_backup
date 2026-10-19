@@ -6,12 +6,15 @@ import { useInstance, useRuns } from "../api/hooks";
 import { BackupNowDialog } from "../components/BackupNowDialog";
 import { ArtifactChips, RunProgress, StatusBadge } from "../components/RunBits";
 import { Alert, Badge, Button, Card, EmptyState, IconButton, LoadingBlock, PageHeader, tableClass } from "../components/ui";
+import { ts, useT } from "../i18n";
 import { formatBytes, formatDateTime, timeAgo } from "../lib/format";
 import { useNow } from "../lib/live";
+import { runTitle } from "./Dashboard";
 import { InstanceForm } from "./InstanceForm";
 import { useInstanceActions } from "./Instances";
 
 export function InstanceDetailPage() {
+  const t = useT();
   const id = Number(useParams().id);
   const { data: instance, isLoading, error } = useInstance(id);
   const { data: runs } = useRuns({ instance_id: id, limit: 10 });
@@ -23,25 +26,44 @@ export function InstanceDetailPage() {
 
   if (isLoading) return <LoadingBlock />;
   if (error || !instance) {
-    return <EmptyState icon={<CircleX />} title="Instance not found" action={<Link to="/instances">Back to instances</Link>} />;
+    return (
+      <EmptyState
+        icon={<CircleX />}
+        title={t("instance.not_found")}
+        action={<Link to="/instances">{t("instance.back_to_list")}</Link>}
+      />
+    );
   }
 
   return (
     <>
       <PageHeader
         back={
-          <Link to="/instances" className="mb-2 inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
-            <ArrowLeft className="size-4" /> Instances
+          <Link
+            to="/instances"
+            className="mb-2 inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            <ArrowLeft className="size-4 rtl:rotate-180" /> {t("nav.instances")}
           </Link>
         }
         title={
           <span className="flex items-center gap-3">
-            {instance.name}
-            {instance.odoo_version && <Badge tone="violet">Odoo {instance.odoo_version}</Badge>}
+            <bdi className="truncate">{instance.name}</bdi>
+            {instance.odoo_version && (
+              <Badge tone="violet">
+                <bdi>Odoo {instance.odoo_version}</bdi>
+              </Badge>
+            )}
           </span>
         }
         description={
-          <a href={instance.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-brand-600">
+          <a
+            href={instance.url}
+            target="_blank"
+            rel="noreferrer"
+            dir="ltr"
+            className="inline-flex items-center gap-1 hover:text-brand-600"
+          >
             {instance.url} <ExternalLink className="size-3" />
           </a>
         }
@@ -52,10 +74,10 @@ export function InstanceDetailPage() {
               onClick={() => actions.refresh(instance)}
               disabled={actions.refreshing === id}
             >
-              Refresh
+              {t("instance.refresh")}
             </Button>
             <Button icon={<Pencil />} onClick={() => setEditOpen(true)}>
-              Edit
+              {t("common.edit")}
             </Button>
             <Button
               variant="danger"
@@ -64,10 +86,10 @@ export function InstanceDetailPage() {
                 if (await actions.remove(instance)) navigate("/instances");
               }}
             >
-              Delete
+              {t("common.delete")}
             </Button>
             <Button variant="primary" icon={<Play />} onClick={() => setBackup([])}>
-              Back up now
+              {t("common.backup_now")}
             </Button>
           </>
         }
@@ -75,36 +97,40 @@ export function InstanceDetailPage() {
 
       <div className="space-y-6">
         {instance.last_check_error && (
-          <Alert tone="red" icon={<CircleX />} title="Last check failed">
-            {instance.last_check_error}
-            {instance.last_checked_at && <span className="ml-1 opacity-70">({timeAgo(instance.last_checked_at, now)})</span>}
+          <Alert tone="red" icon={<CircleX />} title={t("instance.last_check_failed")}>
+            {ts(instance.last_check_error)}
+            {instance.last_checked_at && <span className="ms-1 opacity-70">({timeAgo(instance.last_checked_at, now)})</span>}
           </Alert>
         )}
         {instance.notes && (
           <Card>
-            <p className="whitespace-pre-wrap text-sm text-zinc-600 dark:text-zinc-300">{instance.notes}</p>
+            <p dir="auto" className="whitespace-pre-wrap text-sm text-zinc-600 dark:text-zinc-300">
+              {instance.notes}
+            </p>
           </Card>
         )}
 
         <Card
-          title="Databases"
+          title={t("common.databases")}
           description={
-            instance.last_checked_at ? `List refreshed ${timeAgo(instance.last_checked_at, now)}` : "Never refreshed"
+            instance.last_checked_at
+              ? t("instance.list_refreshed", { when: timeAgo(instance.last_checked_at, now) })
+              : t("instance.never_refreshed")
           }
           padded={false}
         >
           {instance.database_details.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-zinc-500">No database found. Click Refresh.</p>
+            <p className="px-5 py-8 text-center text-sm text-zinc-500">{t("instance.no_databases")}</p>
           ) : (
             <div className={tableClass.wrapper}>
               <table className={tableClass.table}>
                 <thead className={tableClass.head}>
                   <tr>
-                    <th className={tableClass.th}>Database</th>
-                    <th className={tableClass.th}>Last success</th>
-                    <th className={clsx(tableClass.th, "text-right")}>Size</th>
-                    <th className={tableClass.th}>Last run</th>
-                    <th className={tableClass.th}>Jobs</th>
+                    <th className={tableClass.th}>{t("common.database")}</th>
+                    <th className={tableClass.th}>{t("dashboard.last_success")}</th>
+                    <th className={clsx(tableClass.th, "text-end")}>{t("common.size")}</th>
+                    <th className={tableClass.th}>{t("dashboard.last_run")}</th>
+                    <th className={tableClass.th}>{t("instances.jobs")}</th>
                     <th className={tableClass.th} />
                   </tr>
                 </thead>
@@ -112,36 +138,36 @@ export function InstanceDetailPage() {
                   {instance.database_details.map((db) => (
                     <tr key={db.name} className={tableClass.row}>
                       <td className={tableClass.td}>
-                        <span className="font-medium">{db.name}</span>
+                        <bdi className="font-medium">{db.name}</bdi>
                         {!db.exists && (
-                          <Badge tone="gray" className="ml-2">
-                            not on server
+                          <Badge tone="gray" className="ms-2">
+                            {t("instance.not_on_server")}
                           </Badge>
                         )}
                       </td>
                       <td className={clsx(tableClass.td, "whitespace-nowrap")} title={formatDateTime(db.last_success_at)}>
                         {timeAgo(db.last_success_at, now)}
                       </td>
-                      <td className={clsx(tableClass.td, "text-right tabular-nums")}>{formatBytes(db.last_size)}</td>
+                      <td className={clsx(tableClass.td, "text-end tabular-nums")}>{formatBytes(db.last_size)}</td>
                       <td className={tableClass.td}>
                         <StatusBadge status={db.last_status} />
                       </td>
                       <td className={tableClass.td}>
                         <div className="flex flex-wrap gap-1">
                           {db.jobs.length === 0 ? (
-                            <Badge tone="amber">not scheduled</Badge>
+                            <Badge tone="amber">{t("dashboard.not_scheduled")}</Badge>
                           ) : (
                             db.jobs.map((job) => (
                               <Badge key={job.id} tone={job.enabled ? "violet" : "gray"}>
-                                {job.name}
+                                <bdi>{job.name}</bdi>
                               </Badge>
                             ))
                           )}
                         </div>
                       </td>
-                      <td className={clsx(tableClass.td, "text-right")}>
+                      <td className={clsx(tableClass.td, "text-end")}>
                         {db.exists && (
-                          <IconButton label={`Back up ${db.name} now`} onClick={() => setBackup([db.name])}>
+                          <IconButton label={t("instance.backup_db", { database: db.name })} onClick={() => setBackup([db.name])}>
                             <Play />
                           </IconButton>
                         )}
@@ -155,16 +181,19 @@ export function InstanceDetailPage() {
         </Card>
 
         <Card
-          title="Recent runs"
+          title={t("dashboard.recent_runs")}
           padded={false}
           actions={
-            <Link to={`/runs?instance_id=${id}`} className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400">
-              View all
+            <Link
+              to={`/runs?instance_id=${id}`}
+              className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+            >
+              {t("dashboard.view_all")}
             </Link>
           }
         >
           {!runs?.items.length ? (
-            <p className="px-5 py-8 text-center text-sm text-zinc-500">No run yet.</p>
+            <p className="px-5 py-8 text-center text-sm text-zinc-500">{t("instance.no_runs")}</p>
           ) : (
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {runs.items.map((run) => (
@@ -174,10 +203,7 @@ export function InstanceDetailPage() {
                     className="flex flex-col gap-2 px-5 py-3 hover:bg-zinc-50 sm:flex-row sm:items-center dark:hover:bg-zinc-800/40"
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        {run.kind === "restore" ? "Restore → " : ""}
-                        {run.database}
-                      </p>
+                      <p className="truncate text-sm font-medium">{runTitle(run)}</p>
                       <p className="text-xs text-zinc-500">
                         #{run.id} · {timeAgo(run.created_at, now)} · {formatBytes(run.size_bytes)}
                       </p>

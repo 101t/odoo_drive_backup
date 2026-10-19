@@ -14,42 +14,60 @@ import {
 import { useState } from "react";
 import { Link } from "react-router";
 import { useDashboard, useInstances } from "../api/hooks";
-import type { Dashboard, Instance } from "../api/types";
+import type { Dashboard, Instance, Run } from "../api/types";
 import { BackupNowDialog } from "../components/BackupNowDialog";
 import { ArtifactChips, DestinationIcon, RunProgress, StatusBadge, StatusDot } from "../components/RunBits";
 import { Alert, Badge, Button, Card, EmptyState, IconButton, LoadingBlock, PageHeader, Stat, tableClass } from "../components/ui";
-import { formatBytes, formatDateTime, formatDuration, runDurationMs, timeAgo } from "../lib/format";
+import { t, useT } from "../i18n";
+import { formatBytes, formatDateTime, formatDay, formatDuration, runDurationMs, timeAgo } from "../lib/format";
 import { useNow } from "../lib/live";
 
+/** "Restore → instance / database" or "instance / database". */
+export function runTitle(run: Pick<Run, "kind" | "instance_name" | "database">) {
+  const name = (
+    <bdi>
+      {run.instance_name} / {run.database}
+    </bdi>
+  );
+  return run.kind === "restore" ? (
+    <>
+      {t("run.restore_prefix")} {name}
+    </>
+  ) : (
+    name
+  );
+}
+
 function Onboarding({ data }: { data: Dashboard }) {
+  const t = useT();
   const steps = [
     {
       done: data.counts.instances > 0,
-      title: "Connect an Odoo instance",
-      text: "URL and master password of a server running Odoo.",
+      title: t("onboarding.instance"),
+      text: t("onboarding.instance_hint"),
       to: "/instances",
       icon: <Server />,
     },
     {
       done: data.counts.destinations > 0,
-      title: "Add a destination",
-      text: "Google Drive (service account or OAuth) or a local/NAS folder.",
+      title: t("onboarding.destination"),
+      text: t("onboarding.destination_hint"),
       to: "/destinations",
       icon: <Cloud />,
     },
     {
       done: data.counts.jobs > 0,
-      title: "Schedule a backup job",
-      text: "Pick databases, schedule, destinations and retention.",
+      title: t("onboarding.job"),
+      text: t("onboarding.job_hint"),
       to: "/jobs",
       icon: <CalendarClock />,
     },
   ];
   return (
-    <Card title="Get started" description="Three steps to fully automated Odoo backups.">
-      <ol className="grid gap-3 md:grid-cols-3">
+    <Card title={t("onboarding.title")} description={t("onboarding.description")}>
+      <ol className="grid grid-cols-1 gap-3 md:grid-cols-3">
         {steps.map((step, index) => (
-          <li key={step.title}>
+          <li key={step.to}>
             <Link
               to={step.to}
               className={clsx(
@@ -82,18 +100,24 @@ function Onboarding({ data }: { data: Dashboard }) {
 }
 
 function ActivityChart({ data }: { data: Dashboard["activity"] }) {
+  const t = useT();
   const max = Math.max(1, ...data.map((d) => d.success + d.failed));
   return (
     <div>
       <div className="flex h-32 items-end gap-1.5">
         {data.map((day) => {
           const total = day.success + day.failed;
-          const label = new Date(`${day.day}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+          const label = formatDay(day.day, { weekday: "short", day: "numeric" });
           return (
             <div
               key={day.day}
               className="group relative flex h-full flex-1 flex-col justify-end"
-              title={`${label}: ${day.success} succeeded, ${day.failed} failed, ${formatBytes(day.bytes)}`}
+              title={t("chart.day_tooltip", {
+                day: label,
+                success: day.success,
+                failed: day.failed,
+                size: formatBytes(day.bytes),
+              })}
             >
               {total === 0 ? (
                 <div className="h-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800" />
@@ -110,15 +134,15 @@ function ActivityChart({ data }: { data: Dashboard["activity"] }) {
         })}
       </div>
       <div className="mt-2 flex justify-between text-[11px] text-zinc-500">
-        <span>{data[0] && new Date(`${data[0].day}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
-        <span>Today</span>
+        <span>{data[0] && formatDay(data[0].day)}</span>
+        <span>{t("chart.today")}</span>
       </div>
       <div className="mt-3 flex gap-4 text-xs text-zinc-500">
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-2 rounded-sm bg-emerald-400" /> Succeeded
+          <span className="size-2 rounded-sm bg-emerald-400" /> {t("chart.succeeded")}
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-2 rounded-sm bg-rose-400" /> Failed
+          <span className="size-2 rounded-sm bg-rose-400" /> {t("chart.failed")}
         </span>
       </div>
     </div>
@@ -126,6 +150,7 @@ function ActivityChart({ data }: { data: Dashboard["activity"] }) {
 }
 
 export function DashboardPage() {
+  const t = useT();
   const { data, isLoading } = useDashboard();
   const { data: instances = [] } = useInstances();
   const now = useNow(30_000);
@@ -141,11 +166,11 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        title="Dashboard"
-        description="Backup health of every Odoo database you manage."
+        title={t("dashboard.title")}
+        description={t("dashboard.description")}
         actions={
           <Link to="/runs">
-            <Button icon={<Activity />}>View history</Button>
+            <Button icon={<Activity />}>{t("dashboard.view_history")}</Button>
           </Link>
         }
       />
@@ -154,51 +179,58 @@ export function DashboardPage() {
         {!configured && <Onboarding data={data} />}
 
         {data.counts.failing > 0 && (
-          <Alert tone="red" icon={<TriangleAlert />} title={`${data.counts.failing} database(s) failed their last backup`}>
-            Open the run in History to see the full log, then fix the cause or retry with “Back up now”.
+          <Alert tone="red" icon={<TriangleAlert />} title={t("dashboard.failing_title", { count: data.counts.failing })}>
+            {t("dashboard.failing_hint")}
           </Alert>
         )}
         {data.counts.stale > 0 && (
           <Alert
             tone="amber"
             icon={<TriangleAlert />}
-            title={`${data.counts.stale} protected database(s) without a successful backup in the last ${data.stale_after_hours} hours`}
+            title={t("dashboard.stale_title", { count: data.counts.stale, hours: data.stale_after_hours })}
           >
-            Check that their jobs are enabled and the scheduler is running.
+            {t("dashboard.stale_hint")}
           </Alert>
         )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Stat
-            label="Protected databases"
+            label={t("dashboard.protected")}
             value={
               <>
                 {data.counts.protected}
                 <span className="text-base font-normal text-zinc-400"> / {data.counts.databases}</span>
               </>
             }
-            sub={healthy ? "All backups up to date" : `${data.counts.stale} stale · ${data.counts.failing} failing`}
+            sub={
+              healthy
+                ? t("dashboard.all_up_to_date")
+                : t("dashboard.stale_failing", { stale: data.counts.stale, failing: data.counts.failing })
+            }
             icon={<ShieldCheck />}
             tone={healthy ? "green" : "amber"}
           />
           <Stat
-            label="Last 24 hours"
+            label={t("dashboard.last_24h")}
             value={data.last24h.success}
-            sub={`successful · ${data.last24h.failed} failed · ${data.last24h.partial} partial`}
+            sub={t("dashboard.last_24h_sub", { failed: data.last24h.failed, partial: data.last24h.partial })}
             icon={<DatabaseBackup />}
             tone={data.last24h.failed > 0 ? "red" : "violet"}
           />
           <Stat
-            label="Backed up (24h)"
+            label={t("dashboard.backed_up_24h")}
             value={formatBytes(data.last24h.bytes)}
-            sub={`${data.counts.jobs_enabled} active job(s)`}
+            sub={t("dashboard.active_jobs", { count: data.counts.jobs_enabled })}
             icon={<Activity />}
             tone="blue"
           />
           <Stat
-            label="Stored"
+            label={t("dashboard.stored")}
             value={formatBytes(storedBytes)}
-            sub={`${storedFiles} file(s) on ${data.counts.destinations} destination(s)`}
+            sub={t("dashboard.stored_sub", {
+              files: t("count.files", { count: storedFiles }),
+              destinations: t("count.destinations", { count: data.counts.destinations }),
+            })}
             icon={<HardDrive />}
             tone="gray"
           />
@@ -207,17 +239,15 @@ export function DashboardPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           <div className="space-y-6 xl:col-span-2">
             {data.active.length > 0 && (
-              <Card title="In progress" description="Live progress of running backups and restores." padded={false}>
+              <Card title={t("dashboard.in_progress")} description={t("dashboard.in_progress_hint")} padded={false}>
                 <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   {data.active.map((run) => (
                     <li key={run.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
                       <Link to={`/runs/${run.id}`} className="min-w-0 flex-1 hover:underline">
-                        <p className="truncate text-sm font-medium">
-                          {run.kind === "restore" ? "Restore → " : ""}
-                          {run.instance_name} / {run.database}
-                        </p>
+                        <p className="truncate text-sm font-medium">{runTitle(run)}</p>
                         <p className="text-xs text-zinc-500">
-                          #{run.id} · {run.job_name ?? "manual"} · {formatDuration(runDurationMs(run, now))}
+                          #{run.id} · {run.job_name ? <bdi>{run.job_name}</bdi> : t("run.manual")} ·{" "}
+                          {formatDuration(runDurationMs(run, now))}
                         </p>
                       </Link>
                       <div className="sm:w-72">
@@ -229,15 +259,15 @@ export function DashboardPage() {
               </Card>
             )}
 
-            <Card title="Databases" description="Last backup of every known database, problems first." padded={false}>
+            <Card title={t("dashboard.databases")} description={t("dashboard.databases_hint")} padded={false}>
               {data.health.length === 0 ? (
                 <EmptyState
                   icon={<Server />}
-                  title="No databases yet"
-                  description="Add an Odoo instance: its databases are discovered automatically."
+                  title={t("dashboard.no_databases")}
+                  description={t("dashboard.no_databases_hint")}
                   action={
                     <Link to="/instances">
-                      <Button variant="primary">Add an instance</Button>
+                      <Button variant="primary">{t("dashboard.add_instance")}</Button>
                     </Link>
                   }
                 />
@@ -246,10 +276,10 @@ export function DashboardPage() {
                   <table className={tableClass.table}>
                     <thead className={tableClass.head}>
                       <tr>
-                        <th className={tableClass.th}>Database</th>
-                        <th className={tableClass.th}>Last success</th>
-                        <th className={clsx(tableClass.th, "text-right")}>Size</th>
-                        <th className={tableClass.th}>Last run</th>
+                        <th className={tableClass.th}>{t("common.database")}</th>
+                        <th className={tableClass.th}>{t("dashboard.last_success")}</th>
+                        <th className={clsx(tableClass.th, "text-end")}>{t("common.size")}</th>
+                        <th className={tableClass.th}>{t("dashboard.last_run")}</th>
                         <th className={tableClass.th} />
                       </tr>
                     </thead>
@@ -263,34 +293,39 @@ export function DashboardPage() {
                                 <StatusDot status={h.last_status} />
                                 <div className="min-w-0">
                                   <Link to={`/instances/${h.instance_id}`} className="block truncate font-medium hover:underline">
-                                    {h.database}
+                                    <bdi>{h.database}</bdi>
                                   </Link>
-                                  <p className="truncate text-xs text-zinc-500">{h.instance_name}</p>
+                                  <p className="truncate text-xs text-zinc-500">
+                                    <bdi>{h.instance_name}</bdi>
+                                  </p>
                                 </div>
                               </div>
                             </td>
                             <td className={clsx(tableClass.td, "whitespace-nowrap")}>
                               <span title={formatDateTime(h.last_success_at)}>{timeAgo(h.last_success_at, now)}</span>
                               {h.stale && (
-                                <Badge tone="amber" className="ml-2">
-                                  stale
+                                <Badge tone="amber" className="ms-2">
+                                  {t("dashboard.stale")}
                                 </Badge>
                               )}
                               {!h.protected && (
-                                <Badge tone="gray" className="ml-2">
-                                  not scheduled
+                                <Badge tone="gray" className="ms-2">
+                                  {t("dashboard.not_scheduled")}
                                 </Badge>
                               )}
                             </td>
-                            <td className={clsx(tableClass.td, "whitespace-nowrap text-right tabular-nums")}>
+                            <td className={clsx(tableClass.td, "whitespace-nowrap text-end tabular-nums")}>
                               {formatBytes(h.last_size)}
                             </td>
                             <td className={tableClass.td}>
                               <StatusBadge status={h.last_status} />
                             </td>
-                            <td className={clsx(tableClass.td, "text-right")}>
+                            <td className={clsx(tableClass.td, "text-end")}>
                               {instance && (
-                                <IconButton label="Back up now" onClick={() => setBackup({ instance, database: h.database })}>
+                                <IconButton
+                                  label={t("common.backup_now")}
+                                  onClick={() => setBackup({ instance, database: h.database })}
+                                >
                                   <Play />
                                 </IconButton>
                               )}
@@ -305,16 +340,16 @@ export function DashboardPage() {
             </Card>
 
             <Card
-              title="Recent runs"
+              title={t("dashboard.recent_runs")}
               padded={false}
               actions={
                 <Link to="/runs" className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400">
-                  View all
+                  {t("dashboard.view_all")}
                 </Link>
               }
             >
               {data.recent.length === 0 ? (
-                <p className="px-5 py-8 text-center text-sm text-zinc-500">No backup has run yet.</p>
+                <p className="px-5 py-8 text-center text-sm text-zinc-500">{t("dashboard.no_runs")}</p>
               ) : (
                 <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   {data.recent.map((run) => (
@@ -324,10 +359,7 @@ export function DashboardPage() {
                         className="flex flex-col gap-2 px-5 py-3 hover:bg-zinc-50 sm:flex-row sm:items-center dark:hover:bg-zinc-800/40"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">
-                            {run.kind === "restore" ? "Restore → " : ""}
-                            {run.instance_name} / {run.database}
-                          </p>
+                          <p className="truncate text-sm font-medium">{runTitle(run)}</p>
                           <p className="truncate text-xs text-zinc-500">
                             {timeAgo(run.created_at, now)} · {formatDuration(runDurationMs(run, now))} ·{" "}
                             {formatBytes(run.size_bytes)}
@@ -344,20 +376,24 @@ export function DashboardPage() {
           </div>
 
           <div className="space-y-6">
-            <Card title="Last 14 days">
+            <Card title={t("dashboard.last_14_days")}>
               <ActivityChart data={data.activity} />
             </Card>
 
-            <Card title="Upcoming" padded={false}>
+            <Card title={t("dashboard.upcoming")} padded={false}>
               {data.upcoming.length === 0 ? (
-                <p className="px-5 py-6 text-center text-sm text-zinc-500">No scheduled job.</p>
+                <p className="px-5 py-6 text-center text-sm text-zinc-500">{t("dashboard.no_upcoming")}</p>
               ) : (
                 <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   {data.upcoming.map((u) => (
                     <li key={u.job_id} className="flex items-center justify-between gap-3 px-5 py-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{u.job_name}</p>
-                        <p className="truncate text-xs text-zinc-500">{u.instance_name}</p>
+                        <p className="truncate text-sm font-medium">
+                          <bdi>{u.job_name}</bdi>
+                        </p>
+                        <p className="truncate text-xs text-zinc-500">
+                          <bdi>{u.instance_name}</bdi>
+                        </p>
                       </div>
                       <span className="shrink-0 text-xs text-zinc-500" title={formatDateTime(u.next_run_at)}>
                         {timeAgo(u.next_run_at, now)}
@@ -368,9 +404,9 @@ export function DashboardPage() {
               )}
             </Card>
 
-            <Card title="Storage" padded={false}>
+            <Card title={t("dashboard.storage")} padded={false}>
               {data.storage.length === 0 ? (
-                <p className="px-5 py-6 text-center text-sm text-zinc-500">No destination configured.</p>
+                <p className="px-5 py-6 text-center text-sm text-zinc-500">{t("dashboard.no_storage")}</p>
               ) : (
                 <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   {data.storage.map((s) => (
@@ -379,8 +415,10 @@ export function DashboardPage() {
                         <DestinationIcon kind={s.kind} />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{s.name}</p>
-                        <p className="text-xs text-zinc-500">{s.files} file(s)</p>
+                        <p className="truncate text-sm font-medium">
+                          <bdi>{s.name}</bdi>
+                        </p>
+                        <p className="text-xs text-zinc-500">{t("count.files", { count: s.files })}</p>
                       </div>
                       <span className="text-sm tabular-nums">{formatBytes(s.bytes)}</span>
                     </li>

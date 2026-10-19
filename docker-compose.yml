@@ -14,6 +14,9 @@ services:
       ODB_COOKIE_SECURE: "false"
       # Runs executing at the same time (each buffers one backup on disk).
       ODB_MAX_CONCURRENT_JOBS: "2"
+      # Optional: keep the application data in PostgreSQL instead of /data/odoo-backup.db
+      # (see docker-compose.postgres.yml for a complete stack).
+      # ODB_DATABASE_URL: "postgres://user:password@host:5432/odoo_backup"
       # Optional: provide the encryption key instead of letting the app generate /data/secret.key.
       # Generate one with: docker compose run --rm odoo-backup generate-key
       # ODB_SECRET_KEY: ""

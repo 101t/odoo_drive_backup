@@ -9,10 +9,9 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::SqlitePool;
 
 use crate::crypto::Crypto;
-use crate::db::{Artifact, NotificationChannelRow, Run, status};
+use crate::db::{self, Artifact, Db, NotificationChannelRow, Run, status};
 use crate::util::{error_chain, format_bytes, format_duration};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,14 +74,14 @@ pub struct Message {
 
 #[derive(Clone)]
 pub struct Notifier {
-    db: SqlitePool,
+    db: Db,
     crypto: Arc<Crypto>,
     http: reqwest::Client,
     public_url: Option<String>,
 }
 
 impl Notifier {
-    pub fn new(db: SqlitePool, crypto: Arc<Crypto>, public_url: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(db: Db, crypto: Arc<Crypto>, public_url: Option<String>) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("odoo-backup/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(30))
@@ -97,9 +96,9 @@ impl Notifier {
             return Vec::new();
         }
         let success = run.status == status::SUCCESS;
-        let channels: Vec<NotificationChannelRow> = match sqlx::query_as(
-            "SELECT * FROM notification_channels WHERE enabled = 1 AND \
-             ((? AND on_success = 1) OR (? AND on_failure = 1)) ORDER BY id",
+        let channels: Vec<NotificationChannelRow> = match db::query_as(
+            "SELECT * FROM notification_channels WHERE enabled = TRUE AND \
+             ((? AND on_success = TRUE) OR (? AND on_failure = TRUE)) ORDER BY id",
         )
         .bind(success)
         .bind(!success)

@@ -1,10 +1,11 @@
-import { Cloud, FileKey, HardDrive, Info, KeyRound, UserRound } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { Cloud, FileKey, HardDrive, Info, KeyRound, Upload, UserRound } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { errorMessage } from "../api/client";
 import { useSaveDestination, useSettings, useStartOAuth } from "../api/hooks";
 import type { Destination, DestinationInput, GdriveConfig, LocalConfig } from "../api/types";
 import { useToast } from "../components/toast";
 import { Alert, Button, CopyButton, Field, Input, Modal, Segmented, Switch, Textarea } from "../components/ui";
+import { tr, useT } from "../i18n";
 
 type Kind = "gdrive" | "local";
 type Auth = "service_account" | "oauth";
@@ -18,6 +19,7 @@ export function DestinationForm({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   const save = useSaveDestination();
   const startOAuth = useStartOAuth();
   const { data: settings } = useSettings();
@@ -32,6 +34,8 @@ export function DestinationForm({
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [saJson, setSaJson] = useState("");
+  const [keyFileName, setKeyFileName] = useState("");
+  const keyFileInput = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState("/backups");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -41,6 +45,7 @@ export function DestinationForm({
     setName(destination?.name ?? "");
     setKind(destination?.kind ?? "gdrive");
     setSaJson("");
+    setKeyFileName("");
     setClientSecret("");
     if (destination?.kind === "gdrive") {
       const c = destination.config as GdriveConfig;
@@ -64,10 +69,12 @@ export function DestinationForm({
   const origin = settings?.system.public_url ?? window.location.origin;
   const redirectUri = `${origin}/api/oauth/google/callback`;
   const gdrive = destination?.kind === "gdrive" ? destination : null;
-  const needsConnect = kind === "gdrive" && auth === "oauth" && !(gdrive?.connected && (gdrive.config as GdriveConfig).client_id === clientId);
+  const needsConnect =
+    kind === "gdrive" && auth === "oauth" && !(gdrive?.connected && (gdrive.config as GdriveConfig).client_id === clientId);
 
   const loadKeyFile = async (file: File | undefined) => {
     if (!file) return;
+    setKeyFileName(file.name);
     const text = await file.text();
     setSaJson(text);
     try {
@@ -105,7 +112,7 @@ export function DestinationForm({
         window.location.href = url;
         return;
       }
-      toast.success(destination ? "Destination updated" : "Destination added", "Use “Test” to check it end to end.");
+      toast.success(destination ? t("destination_form.updated") : t("destination_form.added"), t("destination_form.test_hint"));
       onClose();
     } catch {
       // shown inline
@@ -120,11 +127,11 @@ export function DestinationForm({
       onClose={onClose}
       dismissable={false}
       size="lg"
-      title={destination ? `Edit ${destination.name}` : "Add a destination"}
-      description="Where backups are stored. A job can copy each backup to several destinations."
+      title={destination ? t("destination_form.edit_title", { name: destination.name }) : t("destination_form.add_title")}
+      description={t("destination_form.description")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button
             type="submit"
             form="destination-form"
@@ -132,7 +139,7 @@ export function DestinationForm({
             loading={save.isPending || startOAuth.isPending}
             icon={needsConnect ? <KeyRound /> : undefined}
           >
-            {needsConnect ? "Save & connect Google account" : destination ? "Save" : "Add destination"}
+            {needsConnect ? t("destination_form.save_connect") : destination ? t("common.save") : t("destinations.add")}
           </Button>
         </>
       }
@@ -145,116 +152,174 @@ export function DestinationForm({
             value={kind}
             onChange={setKind}
             options={[
-              { value: "gdrive", label: (<><Cloud /> Google Drive</>) },
-              { value: "local", label: (<><HardDrive /> Local / NAS folder</>) },
+              {
+                value: "gdrive",
+                label: (
+                  <>
+                    <Cloud /> {t("destinations.google_drive")}
+                  </>
+                ),
+              },
+              {
+                value: "local",
+                label: (
+                  <>
+                    <HardDrive /> {t("destination_form.local")}
+                  </>
+                ),
+              },
             ]}
           />
         )}
 
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} required placeholder={kind === "gdrive" ? "Google Drive" : "NAS"} />
+        <Field label={t("common.name")}>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            dir="auto"
+            placeholder={kind === "gdrive" ? t("destinations.google_drive") : t("destination_form.nas")}
+          />
         </Field>
 
         {kind === "gdrive" && (
           <>
             <div className="space-y-2">
-              <p className="text-sm font-medium">Authentication</p>
+              <p className="text-sm font-medium">{t("destination_form.authentication")}</p>
               <Segmented
                 value={auth}
                 onChange={setAuth}
                 options={[
-                  { value: "service_account", label: (<><FileKey /> Service account</>) },
-                  { value: "oauth", label: (<><UserRound /> Google account (OAuth)</>) },
+                  {
+                    value: "service_account",
+                    label: (
+                      <>
+                        <FileKey /> {t("destinations.service_account")}
+                      </>
+                    ),
+                  },
+                  {
+                    value: "oauth",
+                    label: (
+                      <>
+                        <UserRound /> {t("destination_form.google_account")}
+                      </>
+                    ),
+                  },
                 ]}
               />
             </div>
 
             {auth === "service_account" ? (
               <>
-                <Alert tone="blue" icon={<Info />} title="Use a Shared Drive">
-                  Service accounts have no storage quota of their own. Create a folder in a Shared Drive (Google
-                  Workspace), add the service account e-mail as <b>Content manager</b>, and paste the folder link
-                  below. With a personal Gmail account, use OAuth instead.
+                <Alert tone="blue" icon={<Info />} title={t("destination_form.shared_drive_title")}>
+                  {tr("destination_form.shared_drive_hint", { role: <b>{t("destination_form.content_manager")}</b> })}
                 </Alert>
                 <Field
-                  label="Service account key (JSON)"
+                  label={t("destination_form.key")}
                   hint={
                     serviceAccountEmail
-                      ? `A key for ${serviceAccountEmail} is stored. Upload a new file only to replace it.`
-                      : "Google Cloud console → IAM → Service accounts → Keys → Add key → JSON."
+                      ? t("destination_form.key_stored", { email: serviceAccountEmail })
+                      : t("destination_form.key_hint")
                   }
                 >
                   <div className="space-y-2">
+                    {/* The native file input cannot be translated: a button opens it instead. */}
                     <input
+                      ref={keyFileInput}
                       type="file"
                       accept="application/json,.json"
                       onChange={(e) => loadKeyFile(e.target.files?.[0])}
-                      className="block w-full text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-brand-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-brand-700 hover:file:bg-brand-100 dark:text-zinc-400 dark:file:bg-brand-500/10 dark:file:text-brand-300"
+                      className="hidden"
                     />
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Button size="sm" icon={<Upload />} onClick={() => keyFileInput.current?.click()}>
+                        {t("destination_form.choose_file")}
+                      </Button>
+                      <span className="truncate text-sm text-zinc-500">
+                        {keyFileName ? <bdi>{keyFileName}</bdi> : t("destination_form.no_file")}
+                      </span>
+                    </div>
                     <Textarea
                       value={saJson}
                       onChange={(e) => setSaJson(e.target.value)}
-                      placeholder='…or paste the JSON: { "type": "service_account", … }'
+                      placeholder={t("destination_form.key_paste")}
                       rows={3}
                       className="font-mono text-xs"
+                      dir="auto"
                       spellCheck={false}
                     />
                   </div>
                 </Field>
-                <Field label="Folder" hint="Folder ID or full link, e.g. https://drive.google.com/drive/folders/1AbC…">
-                  <Input value={folderId} onChange={(e) => setFolderId(e.target.value)} required={!impersonate} spellCheck={false} />
+                <Field label={t("destinations.folder")} hint={t("destination_form.folder_hint")}>
+                  <Input
+                    value={folderId}
+                    onChange={(e) => setFolderId(e.target.value)}
+                    required={!impersonate}
+                    dir="ltr"
+                    spellCheck={false}
+                  />
                 </Field>
                 <button
                   type="button"
                   className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
-                  {showAdvanced ? "Hide" : "Show"} advanced options
+                  {showAdvanced ? t("destination_form.hide_advanced") : t("destination_form.show_advanced")}
                 </button>
                 {showAdvanced && (
-                  <Field
-                    label="Impersonate user (domain-wide delegation)"
-                    hint="Workspace only: act as this user so files count against their quota. Requires delegation for the https://www.googleapis.com/auth/drive scope."
-                  >
-                    <Input type="email" value={impersonate} onChange={(e) => setImpersonate(e.target.value)} placeholder="backup@example.com" />
+                  <Field label={t("destination_form.impersonate")} hint={t("destination_form.impersonate_hint")}>
+                    <Input
+                      type="email"
+                      value={impersonate}
+                      onChange={(e) => setImpersonate(e.target.value)}
+                      placeholder="backup@example.com"
+                      dir="ltr"
+                    />
                   </Field>
                 )}
               </>
             ) : (
               <>
-                <Alert tone="blue" icon={<Info />} title="One-time setup in Google Cloud">
-                  <ol className="ml-4 list-decimal space-y-1">
-                    <li>Enable the Google Drive API and create an OAuth client of type <b>Web application</b>.</li>
+                <Alert tone="blue" icon={<Info />} title={t("destination_form.oauth_setup")}>
+                  <ol className="ms-4 list-decimal space-y-1">
+                    <li>{tr("destination_form.oauth_step1", { type: <b>{t("destination_form.web_application")}</b> })}</li>
                     <li>
-                      Add this authorized redirect URI:
-                      <span className="mt-1 flex items-center gap-1 rounded-md bg-white/60 px-2 py-1 font-mono text-xs dark:bg-black/20">
+                      {t("destination_form.oauth_step2")}
+                      <span
+                        dir="ltr"
+                        className="mt-1 flex items-center gap-1 rounded-md bg-white/60 px-2 py-1 font-mono text-xs dark:bg-black/20"
+                      >
                         <span className="min-w-0 flex-1 truncate">{redirectUri}</span>
                         <CopyButton value={redirectUri} />
                       </span>
                     </li>
-                    <li>
-                      Publish the consent screen (<b>In production</b>): apps left in “Testing” get tokens that expire
-                      after 7 days.
-                    </li>
+                    <li>{tr("destination_form.oauth_step3", { status: <b>{t("destination_form.in_production")}</b> })}</li>
                   </ol>
                 </Alert>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Client ID">
-                    <Input value={clientId} onChange={(e) => setClientId(e.target.value)} required spellCheck={false} />
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field label={t("destination_form.client_id")}>
+                    <Input
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                      required
+                      dir="ltr"
+                      spellCheck={false}
+                    />
                   </Field>
-                  <Field label="Client secret">
+                  <Field label={t("destination_form.client_secret")}>
                     <Input
                       type="password"
                       value={clientSecret}
                       onChange={(e) => setClientSecret(e.target.value)}
-                      placeholder={gdrive?.has_client_secret ? "•••••••• (unchanged)" : ""}
+                      placeholder={gdrive?.has_client_secret ? t("instance_form.password_unchanged") : ""}
                       required={!gdrive?.has_client_secret}
                       autoComplete="off"
                     />
                   </Field>
                 </div>
-                <Field label="Folder (optional)" hint='Empty = a folder named "Odoo Backups" in My Drive is created automatically.'>
-                  <Input value={folderId} onChange={(e) => setFolderId(e.target.value)} spellCheck={false} />
+                <Field label={t("destination_form.folder_optional")} hint={t("destination_form.folder_optional_hint")}>
+                  <Input value={folderId} onChange={(e) => setFolderId(e.target.value)} dir="ltr" spellCheck={false} />
                 </Field>
               </>
             )}
@@ -262,19 +327,23 @@ export function DestinationForm({
         )}
 
         {kind === "local" && (
-          <Field
-            label="Directory"
-            hint="Absolute path on the server (in Docker: a mounted volume such as /backups). NFS/SMB mounts work too."
-          >
-            <Input value={path} onChange={(e) => setPath(e.target.value)} required spellCheck={false} className="font-mono" />
+          <Field label={t("destination_form.directory")} hint={t("destination_form.directory_hint")}>
+            <Input
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              required
+              spellCheck={false}
+              dir="ltr"
+              className="font-mono"
+            />
           </Field>
         )}
 
         <Switch
           checked={subfolders}
           onChange={setSubfolders}
-          label="One folder per instance and database"
-          description="Store files as <instance>/<database>/<file>.zip instead of all in one folder."
+          label={t("destination_form.subfolders")}
+          description={t("destination_form.subfolders_hint")}
         />
       </form>
     </Modal>

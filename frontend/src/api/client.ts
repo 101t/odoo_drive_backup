@@ -1,3 +1,5 @@
+import { getLocale, t, ts } from "../i18n";
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -14,11 +16,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     response = await fetch(path, {
       method,
       credentials: "same-origin",
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      headers: {
+        // Lets the server describe schedules in the UI language.
+        "Accept-Language": getLocale(),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new ApiError("Cannot reach the server. Check your connection.", 0);
+    throw new ApiError(t("error.unreachable"), 0);
   }
 
   const text = await response.text();
@@ -48,7 +54,8 @@ export const api = {
   delete: <T>(path: string) => request<T>("DELETE", path),
 };
 
+/** The message of an error, translated when it comes from the server. */
 export function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  if (error instanceof Error) return ts(error.message);
+  return ts(String(error));
 }

@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { errorMessage } from "../api/client";
 import { useBackupNow, useDestinations } from "../api/hooks";
 import type { BackupFormat, Instance } from "../api/types";
+import { useT } from "../i18n";
 import { DestinationIcon } from "./RunBits";
 import { useToast } from "./toast";
 import { Alert, Button, Checkbox, Field, Modal, Segmented } from "./ui";
@@ -19,6 +20,7 @@ export function BackupNowDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   const { data: destinations = [] } = useDestinations();
   const backup = useBackupNow();
   const toast = useToast();
@@ -53,10 +55,7 @@ export function BackupNowDialog({
         destination_ids: destinationIds,
         format,
       });
-      toast.success(
-        result.run_ids.length === 1 ? "Backup started" : `${result.run_ids.length} backups started`,
-        "Follow the progress live in History.",
-      );
+      toast.success(t("backup_now.started", { count: result.run_ids.length }), t("backup_now.started_hint"));
       onClose();
       navigate(result.run_ids.length === 1 ? `/runs/${result.run_ids[0]}` : "/runs?status=active");
     } catch {
@@ -68,12 +67,12 @@ export function BackupNowDialog({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Back up ${instance.name} now`}
-      description="Runs immediately, independent of any schedule. Manual backups are never pruned by retention."
+      title={t("backup_now.title", { name: instance.name })}
+      description={t("backup_now.description")}
       size="lg"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button
             variant="primary"
             icon={<Play />}
@@ -81,38 +80,45 @@ export function BackupNowDialog({
             disabled={databases.length === 0 || destinationIds.length === 0}
             onClick={submit}
           >
-            Start backup
+            {t("backup_now.start")}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        {backup.error && <Alert tone="red" title="Could not start the backup">{errorMessage(backup.error)}</Alert>}
+        {backup.error && (
+          <Alert tone="red" title={t("backup_now.failed")}>
+            {errorMessage(backup.error)}
+          </Alert>
+        )}
         {!instance.has_master_password && (
-          <Alert tone="amber" title="No master password">
-            Set the Odoo master password on this instance before backing it up.
+          <Alert tone="amber" title={t("backup_now.no_password")}>
+            {t("backup_now.no_password_hint")}
           </Alert>
         )}
 
         <div className="space-y-2">
-          <p className="text-sm font-medium">Databases</p>
+          <p className="text-sm font-medium">{t("common.databases")}</p>
           {available.length === 0 ? (
-            <p className="text-sm text-zinc-500">
-              No database known yet. Refresh the instance to list its databases.
-            </p>
+            <p className="text-sm text-zinc-500">{t("backup_now.no_databases")}</p>
           ) : (
             <div className="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto rounded-lg border border-zinc-200 p-3 sm:grid-cols-2 dark:border-zinc-800">
               {available.map((db) => (
-                <Checkbox key={db} checked={databases.includes(db)} onChange={() => setDatabases(toggle(databases, db))} label={db} />
+                <Checkbox
+                  key={db}
+                  checked={databases.includes(db)}
+                  onChange={() => setDatabases(toggle(databases, db))}
+                  label={<bdi>{db}</bdi>}
+                />
               ))}
             </div>
           )}
         </div>
 
         <div className="space-y-2">
-          <p className="text-sm font-medium">Destinations</p>
+          <p className="text-sm font-medium">{t("common.destinations")}</p>
           {destinations.length === 0 ? (
-            <p className="text-sm text-zinc-500">Create a destination first (Destinations page).</p>
+            <p className="text-sm text-zinc-500">{t("backup_now.no_destinations")}</p>
           ) : (
             <div className="space-y-2">
               {destinations.map((d) => (
@@ -123,7 +129,7 @@ export function BackupNowDialog({
                   label={
                     <span className="inline-flex items-center gap-1.5">
                       <DestinationIcon kind={d.kind} className="text-zinc-500" />
-                      {d.name}
+                      <bdi>{d.name}</bdi>
                     </span>
                   }
                 />
@@ -132,14 +138,14 @@ export function BackupNowDialog({
           )}
         </div>
 
-        <Field label="Format" hint={format === "zip" ? "Database dump and filestore (attachments). Recommended." : "PostgreSQL dump only, without the filestore."}>
+        <Field label={t("common.format")} hint={format === "zip" ? t("format.zip_hint") : t("format.dump_hint")}>
           <div>
             <Segmented
               value={format}
               onChange={setFormat}
               options={[
-                { value: "zip", label: "ZIP (with filestore)" },
-                { value: "dump", label: "pg_dump only" },
+                { value: "zip", label: t("format.zip") },
+                { value: "dump", label: t("format.dump") },
               ]}
             />
           </div>

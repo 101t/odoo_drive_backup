@@ -5,13 +5,13 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::runs::with_artifacts;
 use crate::crypto::constant_time_eq;
-use crate::db::Run;
+use crate::db::{self, Run};
 use crate::error::ApiResult;
 use crate::state::AppState;
 
@@ -34,13 +34,13 @@ pub struct DatabaseHealth {
 /// Backup health of every known database (from instances, jobs and history).
 pub async fn database_health(state: &AppState, stale_hours: i64) -> sqlx::Result<Vec<DatabaseHealth>> {
     let instances: Vec<(i64, String, String)> =
-        sqlx::query_as("SELECT id, name, databases_json FROM instances").fetch_all(&state.db).await?;
+        db::query_as("SELECT id, name, databases_json FROM instances").fetch_all(&state.db).await?;
     let jobs: Vec<(i64, bool, String)> =
-        sqlx::query_as("SELECT instance_id, all_databases, databases_json FROM jobs WHERE enabled = 1")
+        db::query_as("SELECT instance_id, all_databases, databases_json FROM jobs WHERE enabled = TRUE")
             .fetch_all(&state.db)
             .await?;
     #[allow(clippy::type_complexity)]
-    let stats: Vec<(i64, String, Option<DateTime<Utc>>, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let stats: Vec<(i64, String, Option<DateTime<Utc>>, Option<DateTime<Utc>>)> = db::query_as(
         "SELECT instance_id, database, \
            MAX(CASE WHEN status IN ('success', 'partial') THEN finished_at END), MAX(created_at) \
          FROM runs WHERE kind = 'backup' AND instance_id IS NOT NULL AND database != '*' \
@@ -48,14 +48,14 @@ pub async fn database_health(state: &AppState, stale_hours: i64) -> sqlx::Result
     )
     .fetch_all(&state.db)
     .await?;
-    let last: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
+    let last: Vec<(i64, String, String, Option<i64>)> = db::query_as(
         "SELECT instance_id, database, status, size_bytes FROM runs WHERE id IN ( \
            SELECT MAX(id) FROM runs WHERE kind = 'backup' AND instance_id IS NOT NULL AND database != '*' \
            AND status NOT IN ('queued', 'running') GROUP BY instance_id, database)",
     )
     .fetch_all(&state.db)
     .await?;
-    let last_success_size: Vec<(i64, String, Option<i64>)> = sqlx::query_as(
+    let last_success_size: Vec<(i64, String, Option<i64>)> = db::query_as(
         "SELECT instance_id, database, size_bytes FROM runs WHERE id IN ( \
            SELECT MAX(id) FROM runs WHERE kind = 'backup' AND instance_id IS NOT NULL \
            AND status IN ('success', 'partial') GROUP BY instance_id, database)",
@@ -133,64 +133,74 @@ pub async fn overview(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let settings = super::settings::load(&state).await?;
     let health = database_health(&state, settings.stale_after_hours).await?;
 
-    let (instances, jobs, jobs_enabled, destinations): (i64, i64, i64, i64) = sqlx::query_as(
+    let (instances, jobs, jobs_enabled, destinations): (i64, i64, i64, i64) = db::query_as(
         "SELECT (SELECT COUNT(*) FROM instances), (SELECT COUNT(*) FROM jobs), \
-                (SELECT COUNT(*) FROM jobs WHERE enabled = 1), (SELECT COUNT(*) FROM destinations)",
+                (SELECT COUNT(*) FROM jobs WHERE enabled = TRUE), (SELECT COUNT(*) FROM destinations)",
     )
     .fetch_one(&state.db)
     .await?;
 
     let since = Utc::now() - Duration::hours(24);
-    let (success, partial, failed, bytes): (i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(status = 'success'), 0), COALESCE(SUM(status = 'partial'), 0), \
-                COALESCE(SUM(status = 'failed'), 0), \
-                COALESCE(SUM(CASE WHEN status IN ('success', 'partial') THEN size_bytes ELSE 0 END), 0) \
+    let (success, partial, failed, bytes): (i64, i64, i64, i64) = db::query_as(
+        "SELECT COUNT(*) FILTER (WHERE status = 'success'), COUNT(*) FILTER (WHERE status = 'partial'), \
+                COUNT(*) FILTER (WHERE status = 'failed'), \
+                CAST(COALESCE(SUM(size_bytes) FILTER (WHERE status IN ('success', 'partial')), 0) AS BIGINT) \
          FROM runs WHERE kind = 'backup' AND created_at >= ?",
     )
     .bind(since)
     .fetch_one(&state.db)
     .await?;
 
-    let storage: Vec<(i64, String, String, i64, i64)> = sqlx::query_as(
-        "SELECT d.id, d.name, d.kind, COUNT(a.id), COALESCE(SUM(a.size_bytes), 0) FROM destinations d \
+    let storage: Vec<(i64, String, String, i64, i64)> = db::query_as(
+        "SELECT d.id, d.name, d.kind, COUNT(a.id), CAST(COALESCE(SUM(a.size_bytes), 0) AS BIGINT) \
+         FROM destinations d \
          LEFT JOIN artifacts a ON a.destination_id = d.id AND a.status = 'stored' \
-         GROUP BY d.id ORDER BY d.name COLLATE NOCASE",
+         GROUP BY d.id, d.name, d.kind ORDER BY LOWER(d.name), d.id",
     )
     .fetch_all(&state.db)
     .await?;
 
-    let activity_since = (Utc::now() - Duration::days(13)).format("%Y-%m-%d").to_string();
-    let activity: Vec<(String, i64, i64, i64)> = sqlx::query_as(
-        "SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(status = 'success'), 0), \
-                COALESCE(SUM(status IN ('failed', 'partial')), 0), \
-                COALESCE(SUM(CASE WHEN status IN ('success', 'partial') THEN size_bytes ELSE 0 END), 0) \
-         FROM runs WHERE kind = 'backup' AND substr(created_at, 1, 10) >= ? GROUP BY day ORDER BY day",
-    )
-    .bind(&activity_since)
-    .fetch_all(&state.db)
-    .await?;
-    let by_day: BTreeMap<String, (i64, i64, i64)> = activity.into_iter().map(|(d, s, f, b)| (d, (s, f, b))).collect();
-    let days: Vec<Value> = (0..14)
-        .rev()
-        .map(|offset| {
-            let day = (Utc::now() - Duration::days(offset)).format("%Y-%m-%d").to_string();
-            let (s, f, b) = by_day.get(&day).cloned().unwrap_or((0, 0, 0));
-            json!({ "day": day, "success": s, "failed": f, "bytes": b })
+    // Grouped per UTC day here rather than in SQL: day arithmetic differs between engines.
+    let today = Utc::now().date_naive();
+    let first_day = today - Duration::days(13);
+    let activity: Vec<(DateTime<Utc>, String, Option<i64>)> =
+        db::query_as("SELECT created_at, status, size_bytes FROM runs WHERE kind = 'backup' AND created_at >= ?")
+            .bind(first_day.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc())
+            .fetch_all(&state.db)
+            .await?;
+    let mut by_day: BTreeMap<NaiveDate, (i64, i64, i64)> = BTreeMap::new();
+    for (created_at, status, size) in activity {
+        let entry = by_day.entry(created_at.date_naive()).or_default();
+        match status.as_str() {
+            "success" => entry.0 += 1,
+            "failed" | "partial" => entry.1 += 1,
+            _ => {}
+        }
+        if status == "success" || status == "partial" {
+            entry.2 += size.unwrap_or(0);
+        }
+    }
+    let days: Vec<Value> = first_day
+        .iter_days()
+        .take(14)
+        .map(|day| {
+            let (s, f, b) = by_day.get(&day).cloned().unwrap_or_default();
+            json!({ "day": day.format("%Y-%m-%d").to_string(), "success": s, "failed": f, "bytes": b })
         })
         .collect();
 
-    let upcoming: Vec<(i64, String, String, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let upcoming: Vec<(i64, String, String, Option<DateTime<Utc>>)> = db::query_as(
         "SELECT j.id, j.name, i.name, j.next_run_at FROM jobs j JOIN instances i ON i.id = j.instance_id \
-         WHERE j.enabled = 1 AND j.next_run_at IS NOT NULL ORDER BY j.next_run_at LIMIT 6",
+         WHERE j.enabled = TRUE AND j.next_run_at IS NOT NULL ORDER BY j.next_run_at LIMIT 6",
     )
     .fetch_all(&state.db)
     .await?;
 
     let active_runs: Vec<Run> =
-        sqlx::query_as(concat!(crate::run_select!(), " WHERE r.status IN ('queued', 'running') ORDER BY r.id"))
+        db::query_as(concat!(crate::run_select!(), " WHERE r.status IN ('queued', 'running') ORDER BY r.id"))
             .fetch_all(&state.db)
             .await?;
-    let recent_runs: Vec<Run> = sqlx::query_as(concat!(
+    let recent_runs: Vec<Run> = db::query_as(concat!(
         crate::run_select!(),
         " WHERE r.status NOT IN ('queued', 'running') ORDER BY r.id DESC LIMIT 8"
     ))
@@ -287,7 +297,7 @@ pub async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
         }
     }
     let counts: Vec<(String, i64)> =
-        sqlx::query_as("SELECT status, COUNT(*) FROM runs WHERE kind = 'backup' GROUP BY status")
+        db::query_as("SELECT status, COUNT(*) FROM runs WHERE kind = 'backup' GROUP BY status")
             .fetch_all(&state.db)
             .await?;
     let _ = writeln!(out, "# HELP odoo_backup_runs Backup runs recorded, by status.");
@@ -295,9 +305,9 @@ pub async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
     for (status, count) in counts {
         let _ = writeln!(out, "odoo_backup_runs{{status=\"{}\"}} {count}", label(&status));
     }
-    let storage: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT d.name, COUNT(a.id), COALESCE(SUM(a.size_bytes), 0) FROM destinations d \
-         LEFT JOIN artifacts a ON a.destination_id = d.id AND a.status = 'stored' GROUP BY d.id",
+    let storage: Vec<(String, i64, i64)> = db::query_as(
+        "SELECT d.name, COUNT(a.id), CAST(COALESCE(SUM(a.size_bytes), 0) AS BIGINT) FROM destinations d \
+         LEFT JOIN artifacts a ON a.destination_id = d.id AND a.status = 'stored' GROUP BY d.id, d.name",
     )
     .fetch_all(&state.db)
     .await?;

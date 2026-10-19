@@ -7,7 +7,7 @@ use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::EngineInner;
-use crate::db::{JobRow, get_destination, status};
+use crate::db::{self, JobRow, get_destination, status};
 use crate::storage::Storage;
 use crate::util::now;
 
@@ -84,7 +84,7 @@ pub(super) async fn apply(engine: &Arc<EngineInner>, job: &JobRow, database: &st
     }
     let tz: chrono_tz::Tz = job.timezone.parse().unwrap_or(chrono_tz::UTC);
 
-    let rows: Vec<(i64, i64, String, DateTime<Utc>)> = match sqlx::query_as(
+    let rows: Vec<(i64, i64, String, DateTime<Utc>)> = match db::query_as(
         "SELECT a.id, a.destination_id, a.remote_id, r.created_at FROM artifacts a \
          JOIN runs r ON r.id = a.run_id \
          WHERE r.job_id = ? AND r.database = ? AND r.kind = 'backup' AND a.status = ? \
@@ -132,7 +132,7 @@ pub(super) async fn apply(engine: &Arc<EngineInner>, job: &JobRow, database: &st
         for (artifact_id, remote_id, _) in items.iter().filter(|(id, _, _)| doomed.contains(id)) {
             match storage.delete(remote_id).await {
                 Ok(()) => {
-                    let _ = sqlx::query(
+                    let _ = db::query(
                         "UPDATE artifacts SET status = ?, deleted_at = ?, delete_reason = 'retention' WHERE id = ?",
                     )
                     .bind(status::ARTIFACT_DELETED)

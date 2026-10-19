@@ -7,9 +7,12 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sqlx::AssertSqlSafe;
 
 use super::{truthy, valid_database_name};
-use crate::db::{Artifact, Run, get_artifact, get_destination, get_instance, get_run, run_artifacts, run_logs, status};
+use crate::db::{
+    self, Artifact, Run, get_artifact, get_destination, get_instance, get_run, run_artifacts, run_logs, status,
+};
 use crate::engine::NewBackup;
 use crate::error::{ApiResult, AppError};
 use crate::events::Progress;
@@ -43,7 +46,8 @@ macro_rules! run_filter {
            AND (?3 IS NULL OR r.instance_id = ?3) \
            AND (?4 IS NULL OR r.job_id = ?4) \
            AND (?5 IS NULL OR r.kind = ?5) \
-           AND (?6 IS NULL OR r.database LIKE ?6 OR r.instance_name LIKE ?6 OR r.file_name LIKE ?6)"
+           AND (?6 IS NULL OR LOWER(r.database) LIKE ?6 OR LOWER(r.instance_name) LIKE ?6 \
+                OR LOWER(r.file_name) LIKE ?6)"
     };
 }
 
@@ -54,14 +58,18 @@ pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> 
         Some(other) => (Some(other.to_string()), Some(other.to_string())),
         None => (None, None),
     };
-    let search =
-        q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", s.replace('%', "")));
+    let search = q
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{}%", s.replace('%', "").to_lowercase()));
     let kind = q.kind.filter(|k| !k.is_empty());
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
 
     let runs: Vec<Run> =
-        sqlx::query_as(concat!(crate::run_select!(), run_filter!(), " ORDER BY r.id DESC LIMIT ?7 OFFSET ?8"))
+        db::query_as(concat!(crate::run_select!(), run_filter!(), " ORDER BY r.id DESC LIMIT ?7 OFFSET ?8"))
             .bind(&status_a)
             .bind(&status_b)
             .bind(q.instance_id)
@@ -72,7 +80,7 @@ pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> 
             .bind(offset)
             .fetch_all(&state.db)
             .await?;
-    let total: i64 = sqlx::query_scalar(concat!("SELECT COUNT(*) FROM runs r", run_filter!()))
+    let total: i64 = db::query_scalar(concat!("SELECT COUNT(*) FROM runs r", run_filter!()))
         .bind(&status_a)
         .bind(&status_b)
         .bind(q.instance_id)
@@ -88,14 +96,17 @@ pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> 
 
 pub(super) async fn with_artifacts(state: &AppState, runs: Vec<Run>) -> ApiResult<Vec<RunView>> {
     let ids: Vec<i64> = runs.iter().map(|r| r.id).collect();
-    let artifacts: Vec<Artifact> = if ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as("SELECT * FROM artifacts WHERE run_id IN (SELECT value FROM json_each(?)) ORDER BY id")
-            .bind(serde_json::to_string(&ids).map_err(|e| AppError::Internal(e.into()))?)
-            .fetch_all(&state.db)
-            .await?
-    };
+    let mut artifacts: Vec<Artifact> = Vec::new();
+    // Bounded IN lists: the list endpoint returns at most 500 runs.
+    for chunk in ids.chunks(500) {
+        // Only placeholders are interpolated; the ids are bound.
+        let sql = format!("SELECT * FROM artifacts WHERE run_id IN {} ORDER BY id", db::placeholders(chunk.len()));
+        let mut query = db::query_as(AssertSqlSafe(sql));
+        for id in chunk {
+            query = query.bind(id);
+        }
+        artifacts.extend(query.fetch_all(&state.db).await?);
+    }
     let mut by_run: HashMap<i64, Vec<Artifact>> = HashMap::new();
     for artifact in artifacts {
         by_run.entry(artifact.run_id).or_default().push(artifact);
@@ -129,7 +140,7 @@ pub async fn cancel(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
     }
     if !state.engine.cancel(id) {
         // Orphaned row (should not happen): close it.
-        sqlx::query("UPDATE runs SET status = ?, error = 'Cancelled', finished_at = ? WHERE id = ?")
+        db::query("UPDATE runs SET status = ?, error = 'Cancelled', finished_at = ? WHERE id = ?")
             .bind(status::CANCELLED)
             .bind(now())
             .bind(id)
@@ -169,7 +180,7 @@ pub async fn remove(
             )));
         }
     }
-    sqlx::query("DELETE FROM runs WHERE id = ?").bind(id).execute(&state.db).await?;
+    db::query("DELETE FROM runs WHERE id = ?").bind(id).execute(&state.db).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -180,7 +191,7 @@ async fn delete_stored(state: &AppState, artifact: &Artifact, reason: &str) -> A
     let destination = get_destination(&state.db, destination_id).await?;
     let storage = Storage::open(&destination, &state.crypto, &state.storage)?;
     storage.delete(remote_id).await?;
-    sqlx::query("UPDATE artifacts SET status = ?, deleted_at = ?, delete_reason = ? WHERE id = ?")
+    db::query("UPDATE artifacts SET status = ?, deleted_at = ?, delete_reason = ? WHERE id = ?")
         .bind(status::ARTIFACT_DELETED)
         .bind(now())
         .bind(reason)

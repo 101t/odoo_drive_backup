@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::db::NotificationChannelRow;
+use crate::db::{self, NotificationChannelRow};
 use crate::error::{ApiResult, AppError};
 use crate::notify::{ChannelSecret, EmailConfig, TelegramConfig, WebhookConfig};
 use crate::state::AppState;
@@ -61,7 +61,7 @@ impl From<NotificationChannelRow> for ChannelView {
 }
 
 async fn load(state: &AppState, id: i64) -> ApiResult<NotificationChannelRow> {
-    sqlx::query_as("SELECT * FROM notification_channels WHERE id = ?")
+    db::query_as("SELECT * FROM notification_channels WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
         .await?
@@ -70,7 +70,7 @@ async fn load(state: &AppState, id: i64) -> ApiResult<NotificationChannelRow> {
 
 pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<ChannelView>>> {
     let rows: Vec<NotificationChannelRow> =
-        sqlx::query_as("SELECT * FROM notification_channels ORDER BY name COLLATE NOCASE").fetch_all(&state.db).await?;
+        db::query_as("SELECT * FROM notification_channels ORDER BY LOWER(name), id").fetch_all(&state.db).await?;
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
@@ -134,7 +134,7 @@ fn prepare(
 pub async fn create(State(state): State<AppState>, Json(input): Json<ChannelInput>) -> ApiResult<Json<ChannelView>> {
     let (config, secret) = prepare(&state, &input, None)?;
     let ts = now();
-    let id: i64 = sqlx::query_scalar(
+    let id: i64 = db::query_scalar(
         "INSERT INTO notification_channels (name, kind, config_json, secret_enc, on_success, on_failure, enabled, \
          created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
@@ -162,7 +162,7 @@ pub async fn update(
         return Err(AppError::bad_request("The channel type cannot be changed"));
     }
     let (config, secret) = prepare(&state, &input, Some(&existing))?;
-    sqlx::query(
+    db::query(
         "UPDATE notification_channels SET name = ?, config_json = ?, secret_enc = ?, on_success = ?, on_failure = ?, \
          enabled = ?, updated_at = ? WHERE id = ?",
     )
@@ -180,7 +180,7 @@ pub async fn update(
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
-    let deleted = sqlx::query("DELETE FROM notification_channels WHERE id = ?").bind(id).execute(&state.db).await?;
+    let deleted = db::query("DELETE FROM notification_channels WHERE id = ?").bind(id).execute(&state.db).await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("Notification channel"));
     }

@@ -17,23 +17,55 @@ import {
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
 import { useAuth, useDashboard, useLogout } from "../api/hooks";
+import { LANGUAGES, setLocale, useLocale, useT, type MessageKey } from "../i18n";
 import { useTheme, type Theme } from "../lib/theme";
 
-const navigation = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/instances", label: "Instances", icon: Server },
-  { to: "/jobs", label: "Backup jobs", icon: CalendarClock },
-  { to: "/runs", label: "History", icon: ListClock },
-  { to: "/destinations", label: "Destinations", icon: Cloud },
-  { to: "/settings", label: "Settings", icon: Settings },
+const navigation: { to: string; label: MessageKey; icon: typeof Server; end?: boolean }[] = [
+  { to: "/", label: "nav.dashboard", icon: LayoutDashboard, end: true },
+  { to: "/instances", label: "nav.instances", icon: Server },
+  { to: "/jobs", label: "nav.jobs", icon: CalendarClock },
+  { to: "/runs", label: "nav.history", icon: ListClock },
+  { to: "/destinations", label: "nav.destinations", icon: Cloud },
+  { to: "/settings", label: "nav.settings", icon: Settings },
 ];
 
+export function LanguageSwitcher({ className }: { className?: string }) {
+  const locale = useLocale();
+  const t = useT();
+  return (
+    <div
+      role="group"
+      aria-label={t("layout.language")}
+      className={clsx("flex rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800", className)}
+    >
+      {LANGUAGES.map((language) => (
+        <button
+          key={language.code}
+          type="button"
+          lang={language.code}
+          aria-pressed={locale === language.code}
+          onClick={() => setLocale(language.code)}
+          className={clsx(
+            "flex flex-1 items-center justify-center rounded-md px-2 py-1 text-xs font-medium",
+            locale === language.code
+              ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-950 dark:text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",
+          )}
+        >
+          {language.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ThemeSwitcher() {
+  const t = useT();
   const [theme, setTheme] = useTheme();
   const options: { value: Theme; icon: ReactNode; label: string }[] = [
-    { value: "light", icon: <Sun />, label: "Light" },
-    { value: "system", icon: <Monitor />, label: "System" },
-    { value: "dark", icon: <Moon />, label: "Dark" },
+    { value: "light", icon: <Sun />, label: t("theme.light") },
+    { value: "system", icon: <Monitor />, label: t("theme.system") },
+    { value: "dark", icon: <Moon />, label: t("theme.dark") },
   ];
   return (
     <div className="flex rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
@@ -42,7 +74,7 @@ function ThemeSwitcher() {
           key={option.value}
           type="button"
           title={option.label}
-          aria-label={`${option.label} theme`}
+          aria-label={t("theme.label", { theme: option.label })}
           onClick={() => setTheme(option.value)}
           className={clsx(
             "flex flex-1 items-center justify-center rounded-md py-1 [&_svg]:size-3.5",
@@ -59,6 +91,7 @@ function ThemeSwitcher() {
 }
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const t = useT();
   const { data: auth } = useAuth();
   const { data: dashboard } = useDashboard();
   const logout = useLogout();
@@ -72,8 +105,10 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <DatabaseBackup className="size-[18px]" />
         </div>
         <div>
-          <p className="text-sm font-semibold leading-tight">Odoo Backup</p>
-          <p className="text-[11px] text-zinc-500">v{auth?.version}</p>
+          <p className="text-sm font-semibold leading-tight">{t("app.name")}</p>
+          <p className="text-[11px] text-zinc-500" dir="ltr">
+            v{auth?.version}
+          </p>
         </div>
       </div>
 
@@ -94,7 +129,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             }
           >
             <item.icon className="size-[18px] shrink-0" />
-            <span className="flex-1">{item.label}</span>
+            <span className="flex-1">{t(item.label)}</span>
             {item.to === "/runs" && active > 0 && (
               <span className="rounded-full bg-sky-100 px-1.5 text-[11px] font-semibold tabular-nums text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">
                 {active}
@@ -110,6 +145,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
 
       <div className="space-y-3 border-t border-zinc-200 p-4 dark:border-zinc-800">
+        <LanguageSwitcher />
         <ThemeSwitcher />
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -121,8 +157,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <button
             type="button"
             onClick={() => logout.mutate()}
-            title="Sign out"
-            aria-label="Sign out"
+            title={t("layout.sign_out")}
+            aria-label={t("layout.sign_out")}
             className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
             <LogOut className="size-4" />
@@ -134,12 +170,13 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const location = useLocation();
 
   return (
     <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-zinc-200 bg-white lg:block dark:border-zinc-800 dark:bg-zinc-900">
+      <aside className="fixed inset-y-0 start-0 z-30 hidden w-60 border-e border-zinc-200 bg-white lg:block dark:border-zinc-800 dark:bg-zinc-900">
         <Sidebar />
       </aside>
 
@@ -147,24 +184,24 @@ export function Layout({ children }: { children: ReactNode }) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label="Open menu"
+          aria-label={t("layout.open_menu")}
           className="rounded-md p-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           <Menu className="size-5" />
         </button>
         <DatabaseBackup className="size-5 text-brand-600" />
-        <span className="text-sm font-semibold">Odoo Backup</span>
+        <span className="text-sm font-semibold">{t("app.name")}</span>
       </div>
 
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 bg-zinc-950/50" onClick={() => setOpen(false)} aria-hidden />
-          <aside className="absolute inset-y-0 left-0 w-64 bg-white shadow-xl dark:bg-zinc-900">
+          <aside className="absolute inset-y-0 start-0 w-64 bg-white shadow-xl dark:bg-zinc-900">
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="Close menu"
-              className="absolute right-3 top-4 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              aria-label={t("layout.close_menu")}
+              className="absolute end-3 top-4 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               <X className="size-4" />
             </button>
@@ -173,7 +210,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      <main className="lg:pl-60">
+      <main className="lg:ps-60">
         <div key={location.pathname} className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           {children}
         </div>

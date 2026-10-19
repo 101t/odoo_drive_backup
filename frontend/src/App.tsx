@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { UNAUTHORIZED_EVENT } from "./api/client";
 import { keys, useAuth } from "./api/hooks";
 import { Layout } from "./components/Layout";
+import { useLocale, useT } from "./i18n";
 import { Alert, LoadingBlock } from "./components/ui";
 import { useLiveEvents } from "./lib/live";
 import { DashboardPage } from "./pages/Dashboard";
@@ -36,8 +37,16 @@ function AuthenticatedApp() {
 }
 
 export function App() {
+  // Re-render everything when the language changes.
+  const locale = useLocale();
+  const t = useT();
   const { data: auth, isLoading, error } = useAuth();
   const queryClient = useQueryClient();
+
+  // Schedule descriptions come from the server in the UI language.
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: keys.jobs });
+  }, [locale, queryClient]);
 
   useEffect(() => {
     const onUnauthorized = () => queryClient.invalidateQueries({ queryKey: keys.auth });
@@ -49,8 +58,8 @@ export function App() {
   if (error || !auth) {
     return (
       <div className="mx-auto max-w-md p-8">
-        <Alert tone="red" title="The server is not reachable">
-          {error instanceof Error ? error.message : "Unknown error"}
+        <Alert tone="red" title={t("app.unreachable")}>
+          {error instanceof Error ? error.message : t("app.unknown_error")}
         </Alert>
       </div>
     );

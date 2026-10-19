@@ -1,4 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocale } from "../i18n";
 import { api } from "./client";
 import type {
   AuthStatus,
@@ -206,8 +207,10 @@ export function useRunJob() {
 }
 
 export function useCronPreview(cron: string, timezone: string) {
+  // The description is composed by the server in the UI language.
+  const locale = useLocale();
   return useQuery({
-    queryKey: ["cron", cron, timezone],
+    queryKey: ["cron", cron, timezone, locale],
     queryFn: () => api.post<CronPreview>("/api/cron/preview", { cron, timezone }),
     enabled: cron.trim().length > 0,
     staleTime: 30_000,

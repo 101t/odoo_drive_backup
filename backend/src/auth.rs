@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::db::{self, Db};
 use argon2::Argon2;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
@@ -12,7 +13,6 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, header};
 use chrono::Utc;
 use serde::Serialize;
-use sqlx::SqlitePool;
 
 use crate::crypto::{random_token, sha256_hex};
 use crate::error::AppError;
@@ -35,11 +35,11 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
-pub async fn current_user(db: &SqlitePool, headers: &HeaderMap) -> Result<Option<AuthUser>, AppError> {
+pub async fn current_user(db: &Db, headers: &HeaderMap) -> Result<Option<AuthUser>, AppError> {
     let Some(token) = cookie_value(headers, SESSION_COOKIE) else {
         return Ok(None);
     };
-    let row: Option<(i64, String)> = sqlx::query_as(
+    let row: Option<(i64, String)> = db::query_as(
         "SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = ? AND s.expires_at > ?",
     )
@@ -50,10 +50,10 @@ pub async fn current_user(db: &SqlitePool, headers: &HeaderMap) -> Result<Option
     Ok(row.map(|(id, username)| AuthUser { id, username }))
 }
 
-pub async fn create_session(db: &SqlitePool, user_id: i64, hours: i64) -> sqlx::Result<String> {
+pub async fn create_session(db: &Db, user_id: i64, hours: i64) -> sqlx::Result<String> {
     let token = random_token();
     let created = now();
-    sqlx::query("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+    db::query("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
         .bind(sha256_hex(token.as_bytes()))
         .bind(user_id)
         .bind(created)
@@ -63,8 +63,8 @@ pub async fn create_session(db: &SqlitePool, user_id: i64, hours: i64) -> sqlx::
     Ok(token)
 }
 
-pub async fn delete_session(db: &SqlitePool, token: &str) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM sessions WHERE token_hash = ?").bind(sha256_hex(token.as_bytes())).execute(db).await?;
+pub async fn delete_session(db: &Db, token: &str) -> sqlx::Result<()> {
+    db::query("DELETE FROM sessions WHERE token_hash = ?").bind(sha256_hex(token.as_bytes())).execute(db).await?;
     Ok(())
 }
 
@@ -136,8 +136,8 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn purge_expired_sessions(db: &SqlitePool) -> sqlx::Result<u64> {
-    let res = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?").bind(Utc::now()).execute(db).await?;
+pub async fn purge_expired_sessions(db: &Db) -> sqlx::Result<u64> {
+    let res = db::query("DELETE FROM sessions WHERE expires_at <= ?").bind(Utc::now()).execute(db).await?;
     Ok(res.rows_affected())
 }
 

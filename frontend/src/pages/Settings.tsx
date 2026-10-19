@@ -6,12 +6,14 @@ import type { Channel } from "../api/types";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { Alert, Badge, Button, Card, EmptyState, Field, IconButton, Input, KeyValue, LoadingBlock, Mono, PageHeader } from "../components/ui";
+import { tr, ts, useT } from "../i18n";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { NotificationForm } from "./NotificationForm";
 
 const channelIcon = { webhook: <Webhook />, telegram: <Send />, email: <Mail /> };
 
 function Notifications() {
+  const t = useT();
   const { data: channels, isLoading } = useChannels();
   const remove = useDeleteChannel();
   const test = useTestChannel();
@@ -28,42 +30,42 @@ function Notifications() {
   const runTest = async (channel: Channel) => {
     try {
       const result = await test.mutateAsync(channel.id);
-      if (result.ok) toast.success("Test message sent", `Check ${channel.name}.`);
-      else toast.error("Test failed", result.error);
+      if (result.ok) toast.success(t("notifications.test_sent"), t("notifications.test_sent_hint", { name: channel.name }));
+      else toast.error(t("notifications.test_failed"), ts(result.error));
     } catch (error) {
-      toast.error("Test failed", errorMessage(error));
+      toast.error(t("notifications.test_failed"), errorMessage(error));
     }
   };
 
   const del = async (channel: Channel) => {
-    const { confirmed } = await confirm({ title: `Delete ${channel.name}?`, confirmLabel: "Delete", danger: true });
+    const { confirmed } = await confirm({
+      title: t("notifications.delete_title", { name: channel.name }),
+      confirmLabel: t("common.delete"),
+      danger: true,
+    });
     if (!confirmed) return;
     try {
       await remove.mutateAsync(channel.id);
     } catch (error) {
-      toast.error("Cannot delete", errorMessage(error));
+      toast.error(t("common.cannot_delete"), errorMessage(error));
     }
   };
 
   return (
     <Card
-      title="Notifications"
-      description="Alerts for failed (and optionally successful) runs."
+      title={t("notifications.title")}
+      description={t("notifications.description")}
       padded={false}
       actions={
         <Button size="sm" icon={<Plus />} onClick={() => openForm(null)}>
-          Add channel
+          {t("notifications.add")}
         </Button>
       }
     >
       {isLoading ? (
         <LoadingBlock />
       ) : !channels?.length ? (
-        <EmptyState
-          icon={<Bell />}
-          title="No notification channel"
-          description="Get a Slack, Discord, Telegram or e-mail message when a backup fails."
-        />
+        <EmptyState icon={<Bell />} title={t("notifications.empty")} description={t("notifications.empty_hint")} />
       ) : (
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {channels.map((channel) => (
@@ -72,20 +74,27 @@ function Notifications() {
                 {channelIcon[channel.kind]}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{channel.name}</p>
+                <p className="truncate text-sm font-medium">
+                  <bdi>{channel.name}</bdi>
+                </p>
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {!channel.enabled && <Badge tone="gray">disabled</Badge>}
-                  {channel.on_failure && <Badge tone="red">failures</Badge>}
-                  {channel.on_success && <Badge tone="green">successes</Badge>}
+                  {!channel.enabled && <Badge tone="gray">{t("jobs.disabled")}</Badge>}
+                  {channel.on_failure && <Badge tone="red">{t("notifications.failures")}</Badge>}
+                  {channel.on_success && <Badge tone="green">{t("notifications.successes")}</Badge>}
                 </div>
               </div>
-              <Button size="sm" variant="ghost" onClick={() => runTest(channel)} loading={test.isPending && test.variables === channel.id}>
-                Test
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => runTest(channel)}
+                loading={test.isPending && test.variables === channel.id}
+              >
+                {t("destinations.test")}
               </Button>
-              <IconButton label="Edit" onClick={() => openForm(channel)}>
+              <IconButton label={t("common.edit")} onClick={() => openForm(channel)}>
                 <Pencil />
               </IconButton>
-              <IconButton label="Delete" tone="danger" onClick={() => del(channel)}>
+              <IconButton label={t("common.delete")} tone="danger" onClick={() => del(channel)}>
                 <Trash />
               </IconButton>
             </li>
@@ -98,6 +107,7 @@ function Notifications() {
 }
 
 function General() {
+  const t = useT();
   const { data } = useSettings();
   const save = useSaveSettings();
   const toast = useToast();
@@ -115,25 +125,25 @@ function General() {
     event.preventDefault();
     try {
       await save.mutateAsync({ stale_after_hours: stale, log_retention_days: logDays });
-      toast.success("Settings saved");
+      toast.success(t("settings.saved"));
     } catch (error) {
-      toast.error("Cannot save", errorMessage(error));
+      toast.error(t("settings.save_failed"), errorMessage(error));
     }
   };
 
   return (
-    <Card title="General">
+    <Card title={t("settings.general")}>
       <form onSubmit={submit} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Stale after (hours)" hint="Protected databases without a successful backup for this long are flagged.">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label={t("settings.stale")} hint={t("settings.stale_hint")}>
             <Input type="number" min={1} max={8760} value={stale} onChange={(e) => setStale(Number(e.target.value))} />
           </Field>
-          <Field label="Keep run logs (days)" hint="0 keeps logs forever. Runs themselves are never pruned.">
+          <Field label={t("settings.log_days")} hint={t("settings.log_days_hint")}>
             <Input type="number" min={0} max={3650} value={logDays} onChange={(e) => setLogDays(Number(e.target.value))} />
           </Field>
         </div>
         <Button type="submit" variant="primary" loading={save.isPending}>
-          Save
+          {t("common.save")}
         </Button>
       </form>
     </Card>
@@ -141,6 +151,7 @@ function General() {
 }
 
 function Account() {
+  const t = useT();
   const change = useChangePassword();
   const toast = useToast();
   const [current, setCurrent] = useState("");
@@ -153,7 +164,7 @@ function Account() {
     if (mismatch) return;
     try {
       await change.mutateAsync({ current_password: current, new_password: next });
-      toast.success("Password changed", "Other sessions were signed out.");
+      toast.success(t("account.changed"), t("account.changed_hint"));
       setCurrent("");
       setNext("");
       setConfirmNext("");
@@ -163,22 +174,41 @@ function Account() {
   };
 
   return (
-    <Card title="Account">
+    <Card title={t("account.title")}>
       <form onSubmit={submit} className="space-y-4">
         {change.error && <Alert tone="red">{errorMessage(change.error)}</Alert>}
-        <Field label="Current password">
-          <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required />
+        <Field label={t("account.current")}>
+          <Input
+            type="password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
         </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="New password" hint="At least 10 characters.">
-            <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} minLength={10} autoComplete="new-password" required />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label={t("account.new")} hint={t("login.password_hint")}>
+            <Input
+              type="password"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              minLength={10}
+              autoComplete="new-password"
+              required
+            />
           </Field>
-          <Field label="Confirm" error={mismatch ? "The passwords do not match" : undefined}>
-            <Input type="password" value={confirmNext} onChange={(e) => setConfirmNext(e.target.value)} autoComplete="new-password" required />
+          <Field label={t("common.confirm")} error={mismatch ? t("login.mismatch") : undefined}>
+            <Input
+              type="password"
+              value={confirmNext}
+              onChange={(e) => setConfirmNext(e.target.value)}
+              autoComplete="new-password"
+              required
+            />
           </Field>
         </div>
         <Button type="submit" variant="primary" loading={change.isPending} disabled={mismatch}>
-          Change password
+          {t("account.change")}
         </Button>
       </form>
     </Card>
@@ -186,53 +216,88 @@ function Account() {
 }
 
 function System() {
+  const t = useT();
   const { data } = useSettings();
   if (!data) return null;
   const s = data.system;
+  const database = s.database;
   return (
-    <Card title="System">
+    <Card title={t("system.title")}>
       <KeyValue
         items={[
-          ["Version", s.version],
-          ["Running since", formatDateTime(s.started_at)],
-          ["Data directory", <Mono>{s.data_dir}</Mono>],
+          [t("system.version"), <bdi>{s.version}</bdi>],
+          [t("system.running_since"), formatDateTime(s.started_at)],
           [
-            "Temp directory",
+            t("system.database"),
             <span>
-              <Mono>{s.temp_dir}</Mono>
-              <span className="ml-2 text-xs text-zinc-500">{formatBytes(s.temp_free_bytes)} free</span>
+              <bdi>
+                {database.engine}
+                {database.version ? ` ${database.version}` : ""}
+              </bdi>
+              {database.size_bytes !== null && (
+                <span className="ms-2 text-xs text-zinc-500">{formatBytes(database.size_bytes)}</span>
+              )}
+              <span className="block text-xs text-zinc-500">
+                {tr(database.engine === "PostgreSQL" ? "system.database_postgres" : "system.database_sqlite", {
+                  var: <Mono>ODB_DATABASE_URL</Mono>,
+                })}
+              </span>
             </span>,
           ],
-          ["Parallel runs", `${s.max_concurrent_jobs} max (ODB_MAX_CONCURRENT_JOBS)`],
-          ["Active runs", s.active_runs],
-          ["Public URL", s.public_url ?? <span className="text-zinc-500">not set (ODB_PUBLIC_URL)</span>],
+          [t("system.data_dir"), <Mono>{s.data_dir}</Mono>],
           [
-            "Prometheus metrics",
-            s.metrics_enabled ? (
-              <span>
-                <Mono>/metrics</Mono> with a bearer token
+            t("system.temp_dir"),
+            <span>
+              <Mono>{s.temp_dir}</Mono>
+              <span className="ms-2 text-xs text-zinc-500">
+                {t("system.free", { size: formatBytes(s.temp_free_bytes) })}
               </span>
+            </span>,
+          ],
+          [
+            t("system.parallel"),
+            <span>
+              {t("system.parallel_value", { count: s.max_concurrent_jobs })}
+              <Mono className="block text-zinc-500 rtl:text-right">ODB_MAX_CONCURRENT_JOBS</Mono>
+            </span>,
+          ],
+          [t("system.active_runs"), s.active_runs],
+          [
+            t("system.public_url"),
+            s.public_url ? (
+              <Mono>{s.public_url}</Mono>
             ) : (
-              <span className="text-zinc-500">disabled (set ODB_METRICS_TOKEN)</span>
+              <span className="text-zinc-500">{tr("system.public_url_unset", { var: <Mono>ODB_PUBLIC_URL</Mono> })}</span>
+            ),
+          ],
+          [
+            t("system.metrics"),
+            s.metrics_enabled ? (
+              <span>{tr("system.metrics_enabled", { path: <Mono>/metrics</Mono> })}</span>
+            ) : (
+              <span className="text-zinc-500">{tr("system.metrics_disabled", { var: <Mono>ODB_METRICS_TOKEN</Mono> })}</span>
             ),
           ],
         ]}
       />
       <p className="mt-5 text-xs text-zinc-500">
-        Back up <Mono>{s.data_dir}/secret.key</Mono> (or your ODB_SECRET_KEY) somewhere safe: stored passwords and
-        credentials cannot be decrypted without it.
+        {tr("system.key_warning", {
+          path: <Mono>{`${s.data_dir}/secret.key`}</Mono>,
+          var: <Mono>ODB_SECRET_KEY</Mono>,
+        })}
       </p>
     </Card>
   );
 }
 
 export function SettingsPage() {
+  const t = useT();
   const { isLoading } = useSettings();
   if (isLoading) return <LoadingBlock />;
   return (
     <>
-      <PageHeader title="Settings" description="Notifications, preferences and system information." />
-      <div className="grid gap-6 xl:grid-cols-2">
+      <PageHeader title={t("settings.title")} description={t("settings.description")} />
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <div className="space-y-6">
           <Notifications />
           <General />

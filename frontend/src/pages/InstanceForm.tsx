@@ -5,39 +5,45 @@ import { useSaveInstance, useTestInstance } from "../api/hooks";
 import type { Instance, InstanceTest } from "../api/types";
 import { useToast } from "../components/toast";
 import { Alert, Badge, Button, Field, IconButton, Input, Modal, Switch, Textarea } from "../components/ui";
+import { ts, useT } from "../i18n";
 
 function TestResult({ result }: { result: InstanceTest }) {
+  const t = useT();
   if (result.error) {
     return (
-      <Alert tone="red" icon={<CircleX />} title="Connection failed">
-        {result.error}
+      <Alert tone="red" icon={<CircleX />} title={t("instance_form.test_failed")}>
+        {ts(result.error)}
       </Alert>
     );
   }
   const passwordLine = {
-    valid: <span className="text-emerald-700 dark:text-emerald-400">Master password accepted</span>,
-    invalid: <span className="font-medium text-rose-700 dark:text-rose-400">Master password rejected by Odoo</span>,
-    unknown: <span>Master password could not be verified on this Odoo version</span>,
-    missing: <span>No master password provided</span>,
+    valid: <span className="text-emerald-700 dark:text-emerald-400">{t("instance_form.password_valid")}</span>,
+    invalid: (
+      <span className="font-medium text-rose-700 dark:text-rose-400">{t("instance_form.password_invalid")}</span>
+    ),
+    unknown: <span>{t("instance_form.password_unknown")}</span>,
+    missing: <span>{t("instance_form.password_missing")}</span>,
   }[result.master_password];
   return (
     <Alert
       tone={result.ok && !result.list_error ? "green" : "amber"}
       icon={result.ok ? <CircleCheck /> : <TriangleAlert />}
-      title={`Connected to Odoo ${result.version}`}
+      title={t("instance_form.connected", { version: result.version ?? "" })}
     >
       <div className="space-y-2">
-        <p className="text-xs opacity-80">{result.url}</p>
+        <p className="text-xs opacity-80" dir="ltr">
+          {result.url}
+        </p>
         <p>{passwordLine}</p>
         {result.list_error ? (
-          <p>{result.list_error}</p>
+          <p>{ts(result.list_error)}</p>
         ) : (
           <div>
-            <p className="mb-1.5">{result.databases.length} database(s):</p>
+            <p className="mb-1.5">{t("instance_form.databases_found", { count: result.databases.length })}</p>
             <div className="flex flex-wrap gap-1">
               {result.databases.map((db) => (
                 <Badge key={db} tone="gray">
-                  {db}
+                  <bdi>{db}</bdi>
                 </Badge>
               ))}
             </div>
@@ -57,6 +63,7 @@ export function InstanceForm({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   const save = useSaveInstance();
   const test = useTestInstance();
   const toast = useToast();
@@ -103,7 +110,10 @@ export function InstanceForm({
           notes,
         },
       });
-      toast.success(instance ? "Instance updated" : "Instance added", saved.odoo_version ? `Odoo ${saved.odoo_version}` : undefined);
+      toast.success(
+        instance ? t("instance_form.updated") : t("instance_form.added"),
+        saved.odoo_version ? `Odoo ${saved.odoo_version}` : undefined,
+      );
       onClose();
     } catch {
       // shown inline
@@ -115,66 +125,69 @@ export function InstanceForm({
       open={open}
       onClose={onClose}
       dismissable={false}
-      title={instance ? `Edit ${instance.name}` : "Add an Odoo instance"}
-      description="Backups use Odoo's database manager, exactly like the Backup button on /web/database/manager."
+      title={instance ? t("instance_form.edit_title", { name: instance.name }) : t("instance_form.add_title")}
+      description={t("instance_form.description")}
       size="lg"
       footer={
         <>
           <Button onClick={runTest} loading={test.isPending} icon={<PlugZap />} disabled={!url}>
-            Test connection
+            {t("instance_form.test")}
           </Button>
           <div className="flex-1" />
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button type="submit" form="instance-form" variant="primary" loading={save.isPending}>
-            {instance ? "Save" : "Add instance"}
+            {instance ? t("common.save") : t("instances.add")}
           </Button>
         </>
       }
     >
       <form id="instance-form" onSubmit={submit} className="space-y-4">
         {save.error && <Alert tone="red">{errorMessage(save.error)}</Alert>}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ACME production" required />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label={t("common.name")}>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t("instance_form.name_placeholder")}
+              dir="auto"
+              required
+            />
           </Field>
-          <Field label="URL" hint="The address you open Odoo with.">
+          <Field label={t("instance_form.url")} hint={t("instance_form.url_hint")}>
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://erp.example.com"
               type="url"
+              dir="ltr"
               required
             />
           </Field>
         </div>
         <Field
-          label="Master password"
-          hint={
-            instance?.has_master_password
-              ? "Leave empty to keep the stored password."
-              : "The admin_passwd of the Odoo server (database manager password). Stored encrypted."
-          }
+          label={t("instance_form.master_password")}
+          hint={instance?.has_master_password ? t("instance_form.password_keep") : t("instance_form.password_hint")}
         >
           <div className="relative">
             <Input
               type={showPassword ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={instance?.has_master_password ? "•••••••• (unchanged)" : ""}
+              placeholder={instance?.has_master_password ? t("instance_form.password_unchanged") : ""}
               autoComplete="new-password"
-              className="pr-10"
+              className="pe-10"
             />
             <IconButton
-              label={showPassword ? "Hide" : "Show"}
+              label={showPassword ? t("common.hide") : t("common.show")}
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-1 top-1/2 -translate-y-1/2"
+              className="absolute end-1 top-1/2 -translate-y-1/2"
             >
               {showPassword ? <EyeOff /> : <Eye />}
             </IconButton>
           </div>
         </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Timeout (seconds)" hint="Max. wait for Odoo to prepare a backup before data starts flowing.">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label={t("instance_form.timeout")} hint={t("instance_form.timeout_hint")}>
             <Input
               type="number"
               min={60}
@@ -187,13 +200,19 @@ export function InstanceForm({
             <Switch
               checked={verifyTls}
               onChange={setVerifyTls}
-              label="Verify TLS certificate"
-              description="Disable only for self-signed certificates."
+              label={t("instance_form.verify_tls")}
+              description={t("instance_form.verify_tls_hint")}
             />
           </div>
         </div>
-        <Field label="Notes">
-          <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional" />
+        <Field label={t("common.notes")}>
+          <Textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            placeholder={t("common.optional")}
+            dir="auto"
+          />
         </Field>
         {test.data && <TestResult result={test.data} />}
         {test.error && <Alert tone="red">{errorMessage(test.error)}</Alert>}

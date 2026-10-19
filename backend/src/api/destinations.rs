@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::crypto::random_token;
-use crate::db::{DestinationRow, get_destination};
+use crate::db::{self, DestinationRow, get_destination};
 use crate::error::{ApiResult, AppError};
 use crate::state::{AppState, PendingOAuth};
 use crate::storage::gdrive::{self, ServiceAccountKey, extract_folder_id};
@@ -55,7 +55,7 @@ macro_rules! destination_select {
     () => {
         "SELECT d.*, \
            (SELECT COUNT(*) FROM artifacts a WHERE a.destination_id = d.id AND a.status = 'stored') AS stored_files, \
-           (SELECT COALESCE(SUM(a.size_bytes), 0) FROM artifacts a WHERE a.destination_id = d.id \
+           (SELECT CAST(COALESCE(SUM(a.size_bytes), 0) AS BIGINT) FROM artifacts a WHERE a.destination_id = d.id \
               AND a.status = 'stored') AS stored_bytes, \
            (SELECT COUNT(*) FROM job_destinations jd WHERE jd.destination_id = d.id) AS job_count \
          FROM destinations d"
@@ -87,7 +87,7 @@ fn view(state: &AppState, row: DestinationListRow) -> DestinationView {
 }
 
 async fn load_view(state: &AppState, id: i64) -> ApiResult<DestinationView> {
-    let row: DestinationListRow = sqlx::query_as(concat!(destination_select!(), " WHERE d.id = ?"))
+    let row: DestinationListRow = db::query_as(concat!(destination_select!(), " WHERE d.id = ?"))
         .bind(id)
         .fetch_optional(&state.db)
         .await?
@@ -97,7 +97,7 @@ async fn load_view(state: &AppState, id: i64) -> ApiResult<DestinationView> {
 
 pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<DestinationView>>> {
     let rows: Vec<DestinationListRow> =
-        sqlx::query_as(concat!(destination_select!(), " ORDER BY d.name COLLATE NOCASE")).fetch_all(&state.db).await?;
+        db::query_as(concat!(destination_select!(), " ORDER BY LOWER(d.name), d.id")).fetch_all(&state.db).await?;
     Ok(Json(rows.into_iter().map(|r| view(&state, r)).collect()))
 }
 
@@ -216,7 +216,7 @@ pub async fn create(
 ) -> ApiResult<Json<DestinationView>> {
     let (config_json, secret_enc) = prepare(&input, None, &state)?;
     let ts = now();
-    let id: i64 = sqlx::query_scalar(
+    let id: i64 = db::query_scalar(
         "INSERT INTO destinations (name, kind, config_json, secret_enc, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
@@ -238,7 +238,7 @@ pub async fn update(
 ) -> ApiResult<Json<DestinationView>> {
     let existing = get_destination(&state.db, id).await?;
     let (config_json, secret_enc) = prepare(&input, Some(&existing), &state)?;
-    sqlx::query("UPDATE destinations SET name = ?, config_json = ?, secret_enc = ?, updated_at = ? WHERE id = ?")
+    db::query("UPDATE destinations SET name = ?, config_json = ?, secret_enc = ?, updated_at = ? WHERE id = ?")
         .bind(input.name.trim())
         .bind(config_json)
         .bind(secret_enc)
@@ -246,7 +246,7 @@ pub async fn update(
         .bind(id)
         .execute(&state.db)
         .await?;
-    sqlx::query("UPDATE artifacts SET destination_name = ? WHERE destination_id = ?")
+    db::query("UPDATE artifacts SET destination_name = ? WHERE destination_id = ?")
         .bind(input.name.trim())
         .bind(id)
         .execute(&state.db)
@@ -255,7 +255,7 @@ pub async fn update(
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
-    let jobs: Vec<String> = sqlx::query_scalar(
+    let jobs: Vec<String> = db::query_scalar(
         "SELECT j.name FROM jobs j JOIN job_destinations jd ON jd.job_id = j.id WHERE jd.destination_id = ?",
     )
     .bind(id)
@@ -267,7 +267,7 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
             jobs.join(", ")
         )));
     }
-    let deleted = sqlx::query("DELETE FROM destinations WHERE id = ?").bind(id).execute(&state.db).await?;
+    let deleted = db::query("DELETE FROM destinations WHERE id = ?").bind(id).execute(&state.db).await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("Destination"));
     }
@@ -376,7 +376,7 @@ async fn finish_oauth(state: &AppState, query: CallbackQuery) -> ApiResult<i64> 
     config.account_email = gdrive::account_email(&state.storage, &tokens.access_token).await;
     secret.refresh_token = Some(tokens.refresh_token);
 
-    sqlx::query("UPDATE destinations SET config_json = ?, secret_enc = ?, updated_at = ? WHERE id = ?")
+    db::query("UPDATE destinations SET config_json = ?, secret_enc = ?, updated_at = ? WHERE id = ?")
         .bind(serde_json::to_string(&config).map_err(|e| AppError::Internal(e.into()))?)
         .bind(state.crypto.encrypt(&serde_json::to_string(&secret).map_err(|e| AppError::Internal(e.into()))?))
         .bind(now())

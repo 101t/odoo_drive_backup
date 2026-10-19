@@ -35,6 +35,7 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Value
         "system": {
             "version": env!("CARGO_PKG_VERSION"),
             "data_dir": state.config.data_dir.display().to_string(),
+            "database": state.db.describe().await,
             "temp_dir": temp_dir.display().to_string(),
             "temp_free_bytes": available_space(&temp_dir),
             "max_concurrent_jobs": state.config.max_concurrent_jobs,

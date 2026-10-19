@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::db::{InstanceRow, get_instance, status};
+use crate::db::{self, InstanceRow, get_instance, status};
 use crate::error::{ApiResult, AppError};
 use crate::odoo::{OdooClient, OdooError, normalize_url};
 use crate::state::AppState;
@@ -104,7 +104,7 @@ macro_rules! instance_select {
 }
 
 async fn load_view(state: &AppState, id: i64) -> ApiResult<InstanceView> {
-    let row: InstanceListRow = sqlx::query_as(concat!(instance_select!(), " WHERE i.id = ?"))
+    let row: InstanceListRow = db::query_as(concat!(instance_select!(), " WHERE i.id = ?"))
         .bind(id)
         .fetch_optional(&state.db)
         .await?
@@ -114,7 +114,7 @@ async fn load_view(state: &AppState, id: i64) -> ApiResult<InstanceView> {
 
 pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<InstanceView>>> {
     let rows: Vec<InstanceListRow> =
-        sqlx::query_as(concat!(instance_select!(), " ORDER BY i.name COLLATE NOCASE")).fetch_all(&state.db).await?;
+        db::query_as(concat!(instance_select!(), " ORDER BY LOWER(i.name), i.id")).fetch_all(&state.db).await?;
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
@@ -128,7 +128,7 @@ struct DatabaseStat {
 
 pub async fn get_one(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let view = load_view(&state, id).await?;
-    let stats: Vec<DatabaseStat> = sqlx::query_as(
+    let stats: Vec<DatabaseStat> = db::query_as(
         "SELECT database, \
            MAX(CASE WHEN status IN ('success', 'partial') THEN finished_at END) AS last_success_at, \
            MAX(created_at) AS last_run_at, COUNT(*) AS runs \
@@ -137,7 +137,7 @@ pub async fn get_one(State(state): State<AppState>, Path(id): Path<i64>) -> ApiR
     .bind(id)
     .fetch_all(&state.db)
     .await?;
-    let last: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+    let last: Vec<(String, String, Option<i64>)> = db::query_as(
         "SELECT database, status, size_bytes FROM runs WHERE id IN ( \
            SELECT MAX(id) FROM runs WHERE instance_id = ? AND kind = 'backup' \
            AND status NOT IN ('queued', 'running') GROUP BY database)",
@@ -146,7 +146,7 @@ pub async fn get_one(State(state): State<AppState>, Path(id): Path<i64>) -> ApiR
     .fetch_all(&state.db)
     .await?;
     let jobs: Vec<(i64, String, bool, String, bool)> =
-        sqlx::query_as("SELECT id, name, all_databases, databases_json, enabled FROM jobs WHERE instance_id = ?")
+        db::query_as("SELECT id, name, all_databases, databases_json, enabled FROM jobs WHERE instance_id = ?")
             .bind(id)
             .fetch_all(&state.db)
             .await?;
@@ -200,7 +200,7 @@ pub async fn create(State(state): State<AppState>, Json(input): Json<InstanceInp
     let url = validate(&input)?;
     let password = input.master_password.as_deref().filter(|p| !p.is_empty()).map(|p| state.crypto.encrypt(p));
     let ts = now();
-    let id: i64 = sqlx::query_scalar(
+    let id: i64 = db::query_scalar(
         "INSERT INTO instances (name, url, master_password_enc, verify_tls, timeout_secs, notes, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
@@ -221,7 +221,7 @@ pub async fn create(State(state): State<AppState>, Json(input): Json<InstanceInp
 /// Fetches version and databases right away, without letting an unreachable server block the save.
 async fn refresh_after_save(state: &AppState, id: i64) {
     if tokio::time::timeout(REFRESH_ON_SAVE_TIMEOUT, refresh_cache(state, id)).await.is_err() {
-        let _ = sqlx::query("UPDATE instances SET last_checked_at = ?, last_check_error = ? WHERE id = ?")
+        let _ = db::query("UPDATE instances SET last_checked_at = ?, last_check_error = ? WHERE id = ?")
             .bind(now())
             .bind("Saved, but the server did not answer in time. Use Refresh to retry.")
             .bind(id)
@@ -241,7 +241,7 @@ pub async fn update(
         Some(p) => Some(state.crypto.encrypt(p)),
         None => existing.master_password_enc,
     };
-    sqlx::query(
+    db::query(
         "UPDATE instances SET name = ?, url = ?, master_password_enc = ?, verify_tls = ?, timeout_secs = ?, \
          notes = ?, updated_at = ? WHERE id = ?",
     )
@@ -260,7 +260,7 @@ pub async fn update(
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
-    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE instance_id = ? AND status IN (?, ?)")
+    let active: i64 = db::query_scalar("SELECT COUNT(*) FROM runs WHERE instance_id = ? AND status IN (?, ?)")
         .bind(id)
         .bind(status::QUEUED)
         .bind(status::RUNNING)
@@ -269,7 +269,7 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
     if active > 0 {
         return Err(AppError::Conflict("This instance has runs in progress; wait or cancel them first".into()));
     }
-    let deleted = sqlx::query("DELETE FROM instances WHERE id = ?").bind(id).execute(&state.db).await?;
+    let deleted = db::query("DELETE FROM instances WHERE id = ?").bind(id).execute(&state.db).await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("Instance"));
     }
@@ -373,7 +373,7 @@ async fn refresh_cache(state: &AppState, id: i64) -> ApiResult<TestResult> {
         } else {
             instance.databases_json.clone()
         };
-        sqlx::query(
+        db::query(
             "UPDATE instances SET odoo_version = ?, databases_json = ?, last_checked_at = ?, last_check_error = ? \
              WHERE id = ?",
         )
@@ -385,7 +385,7 @@ async fn refresh_cache(state: &AppState, id: i64) -> ApiResult<TestResult> {
         .execute(&state.db)
         .await?;
     } else {
-        sqlx::query("UPDATE instances SET last_checked_at = ?, last_check_error = ? WHERE id = ?")
+        db::query("UPDATE instances SET last_checked_at = ?, last_check_error = ? WHERE id = ?")
             .bind(now())
             .bind(error)
             .bind(id)

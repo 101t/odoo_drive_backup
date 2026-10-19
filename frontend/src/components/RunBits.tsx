@@ -11,25 +11,50 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Artifact, Run, RunStatus } from "../api/types";
-import { formatBytes, phaseLabel } from "../lib/format";
+import type { Artifact, ArtifactStatus, Run, RunStatus } from "../api/types";
+import { t, ts, useT, type MessageKey } from "../i18n";
+import { formatBytes, formatRate, phaseLabel } from "../lib/format";
 import { useLiveProgress } from "../lib/live";
 import { Badge, ProgressBar, type Tone } from "./ui";
 
-const statusMeta: Record<RunStatus, { tone: Tone; label: string; icon: ReactNode }> = {
-  success: { tone: "green", label: "Success", icon: <CircleCheck /> },
-  partial: { tone: "amber", label: "Partial", icon: <TriangleAlert /> },
-  failed: { tone: "red", label: "Failed", icon: <CircleX /> },
-  running: { tone: "blue", label: "Running", icon: <LoaderCircle className="animate-spin" /> },
-  queued: { tone: "gray", label: "Queued", icon: <Clock /> },
-  cancelled: { tone: "gray", label: "Cancelled", icon: <Ban /> },
+const statusMeta: Record<RunStatus, { tone: Tone; label: MessageKey; icon: ReactNode }> = {
+  success: { tone: "green", label: "status.success", icon: <CircleCheck /> },
+  partial: { tone: "amber", label: "status.partial", icon: <TriangleAlert /> },
+  failed: { tone: "red", label: "status.failed", icon: <CircleX /> },
+  running: { tone: "blue", label: "status.running", icon: <LoaderCircle className="animate-spin" /> },
+  queued: { tone: "gray", label: "status.queued", icon: <Clock /> },
+  cancelled: { tone: "gray", label: "status.cancelled", icon: <Ban /> },
 };
 
+export function statusLabel(status: RunStatus): string {
+  return t(statusMeta[status]?.label ?? "status.queued");
+}
+
+const artifactLabels: Record<ArtifactStatus, MessageKey> = {
+  pending: "artifact.pending",
+  uploading: "artifact.uploading",
+  stored: "artifact.stored",
+  failed: "artifact.failed",
+  skipped: "artifact.skipped",
+  deleted: "artifact.deleted",
+};
+
+export function artifactStatusLabel(status: ArtifactStatus): string {
+  return t(artifactLabels[status] ?? "artifact.pending");
+}
+
+export function deleteReasonLabel(reason: string): string {
+  if (reason === "retention") return t("artifact.reason_retention");
+  if (reason === "manual") return t("artifact.reason_manual");
+  return reason;
+}
+
 export function StatusBadge({ status }: { status: RunStatus | null | undefined }) {
+  const t = useT();
   if (!status) {
     return (
       <Badge tone="gray">
-        <CircleDashed /> Never
+        <CircleDashed /> {t("status.never")}
       </Badge>
     );
   }
@@ -37,7 +62,7 @@ export function StatusBadge({ status }: { status: RunStatus | null | undefined }
   return (
     <Badge tone={meta.tone}>
       {meta.icon}
-      {meta.label}
+      {t(meta.label)}
     </Badge>
   );
 }
@@ -80,7 +105,7 @@ export function ArtifactChips({ artifacts }: { artifacts: Artifact[] }) {
         return (
           <span
             key={a.id}
-            title={`${a.destination_name}: ${a.status}${a.delete_reason ? ` (${a.delete_reason})` : ""}${a.error ? ` — ${a.error}` : ""}`}
+            title={`${a.destination_name}: ${artifactStatusLabel(a.status)}${a.delete_reason ? ` (${deleteReasonLabel(a.delete_reason)})` : ""}${a.error ? ` — ${ts(a.error)}` : ""}`}
             className={clsx(
               "inline-flex max-w-40 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs",
               tone,
@@ -98,9 +123,10 @@ export function ArtifactChips({ artifacts }: { artifacts: Artifact[] }) {
 
 /** Phase, progress bar and throughput of an active run (live through SSE). */
 export function RunProgress({ run, compact = false }: { run: Run; compact?: boolean }) {
+  const t = useT();
   const progress = useLiveProgress(run.id, run.progress);
   if (run.status === "queued") {
-    return <span className="text-xs text-zinc-500">Waiting in queue…</span>;
+    return <span className="text-xs text-zinc-500">{t("progress.queued")}</span>;
   }
   if (run.status !== "running") return null;
 
@@ -108,12 +134,14 @@ export function RunProgress({ run, compact = false }: { run: Run; compact?: bool
   const total = progress?.bytes_total ?? null;
   const done = progress?.bytes_done ?? 0;
   const ratio = total ? done / total : null;
-  const label = [phaseLabel(phase), progress?.label ? `→ ${progress.label}` : null].filter(Boolean).join(" ");
+  const label = [phaseLabel(phase), progress?.label ? t("progress.target", { label: progress.label }) : null]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div className={clsx("min-w-44 space-y-1", compact ? "max-w-xs" : "")}>
       <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className="truncate font-medium text-sky-700 dark:text-sky-400">{label || "Starting…"}</span>
+        <span className="truncate font-medium text-sky-700 dark:text-sky-400">{label || t("progress.starting")}</span>
         {ratio !== null && <span className="tabular-nums text-zinc-500">{Math.floor(ratio * 100)}%</span>}
       </div>
       <ProgressBar value={phase === "retention" ? null : ratio} />
@@ -123,7 +151,7 @@ export function RunProgress({ run, compact = false }: { run: Run; compact?: bool
             {formatBytes(done)}
             {total ? ` / ${formatBytes(total)}` : ""}
           </span>
-          {progress.rate_bps > 0 && <span>{formatBytes(progress.rate_bps)}/s</span>}
+          {progress.rate_bps > 0 && <span>{formatRate(progress.rate_bps)}</span>}
         </div>
       )}
     </div>

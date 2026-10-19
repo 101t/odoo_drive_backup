@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
-use sqlx::SqlitePool;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -21,7 +20,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::Config;
 use crate::crypto::Crypto;
 use crate::db::{
-    Artifact, InstanceRow, RestoreOptions, Run, RunLog, get_instance, get_job, get_run, job_destination_ids,
+    self, Artifact, Db, InstanceRow, RestoreOptions, Run, RunLog, get_instance, get_job, get_run, job_destination_ids,
     run_artifacts, status,
 };
 use crate::events::{Event, EventBus, Progress};
@@ -41,7 +40,7 @@ struct ActiveRun {
 }
 
 pub struct EngineInner {
-    pub db: SqlitePool,
+    pub db: Db,
     pub config: Arc<Config>,
     pub crypto: Arc<Crypto>,
     pub events: EventBus,
@@ -75,7 +74,7 @@ pub struct NewBackup<'a> {
 
 impl Engine {
     pub fn new(
-        db: SqlitePool,
+        db: Db,
         config: Arc<Config>,
         crypto: Arc<Crypto>,
         events: EventBus,
@@ -102,7 +101,7 @@ impl Engine {
     pub async fn recover(&self) -> anyhow::Result<()> {
         let message = "Interrupted: the service stopped while this run was in progress";
         let res =
-            sqlx::query("UPDATE runs SET status = ?, phase = NULL, error = ?, finished_at = ? WHERE status IN (?, ?)")
+            db::query("UPDATE runs SET status = ?, phase = NULL, error = ?, finished_at = ? WHERE status IN (?, ?)")
                 .bind(status::FAILED)
                 .bind(message)
                 .bind(now())
@@ -113,18 +112,16 @@ impl Engine {
         if res.rows_affected() > 0 {
             tracing::warn!(count = res.rows_affected(), "marked interrupted runs as failed");
         }
-        sqlx::query("UPDATE artifacts SET status = ?, error = 'Interrupted' WHERE status = ?")
+        db::query("UPDATE artifacts SET status = ?, error = 'Interrupted' WHERE status = ?")
             .bind(status::ARTIFACT_FAILED)
             .bind(status::ARTIFACT_UPLOADING)
             .execute(&self.db)
             .await?;
-        sqlx::query(
-            "UPDATE artifacts SET status = ?, error = 'Not uploaded: the run was interrupted' WHERE status = ?",
-        )
-        .bind(status::ARTIFACT_SKIPPED)
-        .bind(status::ARTIFACT_PENDING)
-        .execute(&self.db)
-        .await?;
+        db::query("UPDATE artifacts SET status = ?, error = 'Not uploaded: the run was interrupted' WHERE status = ?")
+            .bind(status::ARTIFACT_SKIPPED)
+            .bind(status::ARTIFACT_PENDING)
+            .execute(&self.db)
+            .await?;
 
         let temp_dir = self.config.temp_dir();
         if let Ok(mut entries) = tokio::fs::read_dir(&temp_dir).await {
@@ -183,7 +180,7 @@ impl Engine {
         let mut run_ids = Vec::new();
         for database in &databases {
             let busy: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE job_id = ? AND database = ? AND status IN (?, ?)")
+                db::query_scalar("SELECT COUNT(*) FROM runs WHERE job_id = ? AND database = ? AND status IN (?, ?)")
                     .bind(job.id)
                     .bind(database)
                     .bind(status::QUEUED)
@@ -212,14 +209,12 @@ impl Engine {
     async fn discover_databases(&self, instance: &InstanceRow) -> anyhow::Result<Vec<String>> {
         let client = OdooClient::new(&instance.url, instance.verify_tls, Duration::from_secs(60))?;
         let list = client.list_databases().await?;
-        sqlx::query(
-            "UPDATE instances SET databases_json = ?, last_checked_at = ?, last_check_error = NULL WHERE id = ?",
-        )
-        .bind(serde_json::to_string(&list)?)
-        .bind(now())
-        .bind(instance.id)
-        .execute(&self.db)
-        .await?;
+        db::query("UPDATE instances SET databases_json = ?, last_checked_at = ?, last_check_error = NULL WHERE id = ?")
+            .bind(serde_json::to_string(&list)?)
+            .bind(now())
+            .bind(instance.id)
+            .execute(&self.db)
+            .await?;
         Ok(list)
     }
 
@@ -233,7 +228,7 @@ impl Engine {
         error: &str,
     ) -> anyhow::Result<i64> {
         let ts = now();
-        let id: i64 = sqlx::query_scalar(
+        let id: i64 = db::query_scalar(
             "INSERT INTO runs (kind, job_id, instance_id, instance_name, database, format, trigger, status, error, \
              created_at, started_at, finished_at) VALUES ('backup', ?, ?, ?, '*', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         )
@@ -263,7 +258,7 @@ impl Engine {
     pub async fn enqueue_backup(&self, spec: NewBackup<'_>) -> anyhow::Result<i64> {
         let ts = now();
         let mut tx = self.db.begin().await?;
-        let run_id: i64 = sqlx::query_scalar(
+        let run_id: i64 = db::query_scalar(
             "INSERT INTO runs (kind, job_id, instance_id, instance_name, database, format, trigger, status, created_at) \
              VALUES ('backup', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         )
@@ -275,15 +270,15 @@ impl Engine {
         .bind(spec.trigger)
         .bind(status::QUEUED)
         .bind(ts)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut tx)
         .await?;
         for destination_id in spec.destination_ids {
-            let (name, kind): (String, String) = sqlx::query_as("SELECT name, kind FROM destinations WHERE id = ?")
+            let (name, kind): (String, String) = db::query_as("SELECT name, kind FROM destinations WHERE id = ?")
                 .bind(destination_id)
-                .fetch_one(&mut *tx)
+                .fetch_one(&mut tx)
                 .await
                 .with_context(|| format!("destination #{destination_id} not found"))?;
-            sqlx::query(
+            db::query(
                 "INSERT INTO artifacts (run_id, destination_id, destination_name, destination_kind, status, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
@@ -293,7 +288,7 @@ impl Engine {
             .bind(kind)
             .bind(status::ARTIFACT_PENDING)
             .bind(ts)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await?;
         }
         tx.commit().await?;
@@ -322,7 +317,7 @@ impl Engine {
             source_instance: source.instance_name.clone(),
             source_database: source.database.clone(),
         };
-        let run_id: i64 = sqlx::query_scalar(
+        let run_id: i64 = db::query_scalar(
             "INSERT INTO runs (kind, instance_id, instance_name, database, format, trigger, status, file_name, \
              size_bytes, md5, sha256, odoo_version, source_artifact_id, restore_options, created_at) \
              VALUES ('restore', ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
@@ -429,7 +424,7 @@ impl EngineInner {
         }
 
         let ts = now();
-        let _ = sqlx::query(
+        let _ = db::query(
             "UPDATE artifacts SET status = ?, error = 'Interrupted during upload' WHERE run_id = ? AND status = ?",
         )
         .bind(status::ARTIFACT_FAILED)
@@ -437,7 +432,7 @@ impl EngineInner {
         .bind(status::ARTIFACT_UPLOADING)
         .execute(&self.db)
         .await;
-        let _ = sqlx::query(
+        let _ = db::query(
             "UPDATE artifacts SET status = ?, error = 'Not uploaded: the run ended before this step' \
              WHERE run_id = ? AND status = ?",
         )
@@ -446,14 +441,13 @@ impl EngineInner {
         .bind(status::ARTIFACT_PENDING)
         .execute(&self.db)
         .await;
-        if let Err(err) =
-            sqlx::query("UPDATE runs SET status = ?, error = ?, phase = NULL, finished_at = ? WHERE id = ?")
-                .bind(final_status)
-                .bind(&error)
-                .bind(ts)
-                .bind(run_id)
-                .execute(&self.db)
-                .await
+        if let Err(err) = db::query("UPDATE runs SET status = ?, error = ?, phase = NULL, finished_at = ? WHERE id = ?")
+            .bind(final_status)
+            .bind(&error)
+            .bind(ts)
+            .bind(run_id)
+            .execute(&self.db)
+            .await
         {
             tracing::error!(run_id, error = %err, "cannot store run result");
         }
@@ -497,7 +491,7 @@ impl EngineInner {
             _ = cancel.cancelled() => return Err(Cancelled.into()),
         };
 
-        sqlx::query("UPDATE runs SET status = ?, started_at = ? WHERE id = ?")
+        db::query("UPDATE runs SET status = ?, started_at = ? WHERE id = ?")
             .bind(status::RUNNING)
             .bind(now())
             .bind(run_id)
@@ -524,7 +518,7 @@ impl EngineInner {
             _ => tracing::info!(run_id, "{message}"),
         }
         let ts = now();
-        match sqlx::query_scalar::<_, i64>(
+        match db::query_scalar::<i64>(
             "INSERT INTO run_logs (run_id, ts, level, message) VALUES (?, ?, ?, ?) RETURNING id",
         )
         .bind(run_id)
@@ -542,7 +536,7 @@ impl EngineInner {
     }
 
     pub(crate) async fn set_phase(&self, run_id: i64, phase: &str) {
-        let _ = sqlx::query("UPDATE runs SET phase = ? WHERE id = ?").bind(phase).bind(run_id).execute(&self.db).await;
+        let _ = db::query("UPDATE runs SET phase = ? WHERE id = ?").bind(phase).bind(run_id).execute(&self.db).await;
         if let Some(active) = self.active.lock().unwrap().get_mut(&run_id) {
             active.progress = None;
         }

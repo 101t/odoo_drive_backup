@@ -307,6 +307,8 @@ export interface SettingsResponse {
   system: {
     version: string;
     data_dir: string;
+    /** Where the application data lives: "SQLite" (file in the data directory) or "PostgreSQL". */
+    database: { engine: string; version: string | null; size_bytes: number | null };
     temp_dir: string;
     temp_free_bytes: number | null;
     max_concurrent_jobs: number;

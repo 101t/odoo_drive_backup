@@ -361,6 +361,9 @@ impl OdooClient {
 
 /// Normalizes user input such as `https://erp.example.com/web#action=1` to `https://erp.example.com`.
 pub fn normalize_url(input: &str) -> Result<String, String> {
+    if !input.contains("://") {
+        return Err("the URL must start with http:// or https://".into());
+    }
     let mut url = url::Url::parse(input.trim()).map_err(|e| format!("invalid URL: {e}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err("the URL must start with http:// or https://".into());
@@ -439,13 +442,48 @@ fn html_to_text(fragment: &str) -> String {
             _ => {}
         }
     }
-    let unescaped = out
-        .replace("&#39;", "'")
-        .replace("&quot;", "\"")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&");
-    unescaped.split_whitespace().collect::<Vec<_>>().join(" ")
+    decode_entities(&out).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Decodes the HTML character references Odoo emits (`&quot;`, `&#34;`, `&#x27;`, …).
+fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest.find(';').filter(|&end| end <= 10).and_then(|end| {
+            let entity = &rest[1..end];
+            let c = match entity {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                _ => entity
+                    .strip_prefix("#x")
+                    .or_else(|| entity.strip_prefix("#X"))
+                    .map(|hex| u32::from_str_radix(hex, 16))
+                    .or_else(|| entity.strip_prefix('#').map(str::parse::<u32>))
+                    .and_then(Result::ok)
+                    .and_then(char::from_u32),
+            };
+            c.map(|c| (c, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -463,6 +501,16 @@ mod tests {
         assert_eq!(normalize_url("https://example.com/odoo").unwrap(), "https://example.com");
         assert!(normalize_url("ftp://example.com").is_err());
         assert!(normalize_url("not a url").is_err());
+        assert_eq!(normalize_url("erp.example.com:8069").unwrap_err(), "the URL must start with http:// or https://");
+    }
+
+    #[test]
+    fn entities_are_decoded() {
+        assert_eq!(
+            decode_entities("relation &#34;ir_module&#34; &amp; &#x27;x&#X27; &lt;b&gt;"),
+            "relation \"ir_module\" & 'x' <b>"
+        );
+        assert_eq!(decode_entities("a & b &unknown; &#xZZ; tail&"), "a & b &unknown; &#xZZ; tail&");
     }
 
     #[test]

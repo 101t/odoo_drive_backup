@@ -11,6 +11,12 @@
     <title>Odoo Backup</title>
     <script>
       try {
+        var l = localStorage.getItem("odb-lang");
+        if (l !== "en" && l !== "ar") l = /^ar(-|$)/i.test(navigator.language || "") ? "ar" : "en";
+        document.documentElement.lang = l;
+        document.documentElement.dir = l === "ar" ? "rtl" : "ltr";
+      } catch (e) {}
+      try {
         var t = localStorage.getItem("odb-theme");
         if (t === "dark" || (t !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
           document.documentElement.classList.add("dark");

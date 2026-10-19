@@ -6,24 +6,25 @@ import type { BackupFormat, Job, JobInput } from "../api/types";
 import { DestinationIcon } from "../components/RunBits";
 import { useToast } from "../components/toast";
 import { Alert, Badge, Button, Checkbox, Field, Input, Modal, Segmented, Select, Switch } from "../components/ui";
+import { t, ts, useT, type MessageKey } from "../i18n";
 import { defaultTimezone, formatDateTime, formatInZone, timezones } from "../lib/format";
 
-const PRESETS = [
-  { label: "Hourly", cron: "0 * * * *" },
-  { label: "Every 6 hours", cron: "0 */6 * * *" },
-  { label: "Daily 02:00", cron: "0 2 * * *" },
-  { label: "Twice a day", cron: "0 2,14 * * *" },
-  { label: "Weekly (Sun 03:00)", cron: "0 3 * * 0" },
-  { label: "Monthly (1st 04:00)", cron: "0 4 1 * *" },
+const PRESETS: { label: MessageKey; cron: string }[] = [
+  { label: "preset.hourly", cron: "0 * * * *" },
+  { label: "preset.every_6_hours", cron: "0 */6 * * *" },
+  { label: "preset.daily", cron: "0 2 * * *" },
+  { label: "preset.twice_daily", cron: "0 2,14 * * *" },
+  { label: "preset.weekly", cron: "0 3 * * 0" },
+  { label: "preset.monthly", cron: "0 4 1 * *" },
 ];
 
 const RETENTION_FIELDS = [
-  { key: "keep_last", label: "Last", hint: "most recent" },
-  { key: "keep_daily", label: "Daily", hint: "days" },
-  { key: "keep_weekly", label: "Weekly", hint: "weeks" },
-  { key: "keep_monthly", label: "Monthly", hint: "months" },
-  { key: "keep_yearly", label: "Yearly", hint: "years" },
-] as const;
+  { key: "keep_last", label: "retention.last", hint: "retention.last_hint" },
+  { key: "keep_daily", label: "retention.daily", hint: "retention.daily_hint" },
+  { key: "keep_weekly", label: "retention.weekly", hint: "retention.weekly_hint" },
+  { key: "keep_monthly", label: "retention.monthly", hint: "retention.monthly_hint" },
+  { key: "keep_yearly", label: "retention.yearly", hint: "retention.yearly_hint" },
+] as const satisfies readonly { key: string; label: MessageKey; hint: MessageKey }[];
 
 type RetentionKey = (typeof RETENTION_FIELDS)[number]["key"];
 
@@ -71,15 +72,16 @@ export function jobToInput(job: Job): JobInput {
 
 export function retentionSummary(job: Pick<JobInput, RetentionKey>): string {
   const parts: string[] = [];
-  if (job.keep_last) parts.push(`last ${job.keep_last}`);
-  if (job.keep_daily) parts.push(`${job.keep_daily} daily`);
-  if (job.keep_weekly) parts.push(`${job.keep_weekly} weekly`);
-  if (job.keep_monthly) parts.push(`${job.keep_monthly} monthly`);
-  if (job.keep_yearly) parts.push(`${job.keep_yearly} yearly`);
-  return parts.length ? parts.join(" · ") : "keep everything";
+  if (job.keep_last) parts.push(t("retention.summary_last", { count: job.keep_last }));
+  if (job.keep_daily) parts.push(t("retention.summary_daily", { count: job.keep_daily }));
+  if (job.keep_weekly) parts.push(t("retention.summary_weekly", { count: job.keep_weekly }));
+  if (job.keep_monthly) parts.push(t("retention.summary_monthly", { count: job.keep_monthly }));
+  if (job.keep_yearly) parts.push(t("retention.summary_yearly", { count: job.keep_yearly }));
+  return parts.length ? parts.join(" · ") : t("retention.keep_everything");
 }
 
 export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean; onClose: () => void }) {
+  const t = useT();
   const { data: instances = [] } = useInstances();
   const { data: destinations = [] } = useDestinations();
   const save = useSaveJob();
@@ -110,12 +112,19 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
   const knownDatabases = Array.from(new Set([...(instance?.databases ?? []), ...form.databases])).sort();
 
   const toggle = <T,>(list: T[], value: T) => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
+  const addExtraDatabase = () => {
+    if (extraDb.trim()) update("databases", Array.from(new Set([...form.databases, extraDb.trim()])));
+    setExtraDb("");
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     try {
       const saved = await save.mutateAsync({ id: job?.id, input: form });
-      toast.success(job ? "Job updated" : "Job created", saved.next_run_at ? `Next run: ${formatDateTime(saved.next_run_at)}` : undefined);
+      toast.success(
+        job ? t("job_form.updated") : t("job_form.created"),
+        saved.next_run_at ? t("job_form.next_run", { when: formatDateTime(saved.next_run_at) }) : undefined,
+      );
       onClose();
     } catch {
       // shown inline
@@ -128,18 +137,18 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
       onClose={onClose}
       dismissable={false}
       size="xl"
-      title={job ? `Edit ${job.name}` : "New backup job"}
-      description="What to back up, when, where to, and how long to keep it."
+      title={job ? t("job_form.edit_title", { name: job.name }) : t("job_form.new_title")}
+      description={t("job_form.description")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button type="submit" form="job-form" variant="primary" loading={save.isPending}>
-            {job ? "Save" : "Create job"}
+            {job ? t("common.save") : t("job_form.create")}
           </Button>
         </>
       }
     >
-      <form id="job-form" onSubmit={submit} className="grid gap-6 lg:grid-cols-2">
+      <form id="job-form" onSubmit={submit} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {save.error && (
           <div className="lg:col-span-2">
             <Alert tone="red">{errorMessage(save.error)}</Alert>
@@ -147,11 +156,17 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
         )}
 
         <div className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Name">
-              <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="Nightly production" required />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label={t("common.name")}>
+              <Input
+                value={form.name}
+                onChange={(e) => update("name", e.target.value)}
+                placeholder={t("job_form.name_placeholder")}
+                dir="auto"
+                required
+              />
             </Field>
-            <Field label="Instance">
+            <Field label={t("job_form.instance")}>
               <Select
                 value={form.instance_id}
                 onChange={(e) => {
@@ -160,7 +175,7 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
                 }}
                 required
               >
-                {instances.length === 0 && <option value={0}>No instance: add one first</option>}
+                {instances.length === 0 && <option value={0}>{t("job_form.no_instance")}</option>}
                 {instances.map((i) => (
                   <option key={i.id} value={i.id}>
                     {i.name}
@@ -171,17 +186,17 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
           </div>
 
           <div className="space-y-3">
-            <p className="text-sm font-medium">Databases</p>
+            <p className="text-sm font-medium">{t("common.databases")}</p>
             <Switch
               checked={form.all_databases}
               onChange={(v) => update("all_databases", v)}
-              label="All databases"
-              description="Discovered on the server at each run, so new databases are protected automatically."
+              label={t("jobs.all_databases")}
+              description={t("job_form.all_databases_hint")}
             />
             {!form.all_databases && (
               <div className="space-y-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
                 {knownDatabases.length === 0 ? (
-                  <p className="text-sm text-zinc-500">No database listed for this instance. Add names manually below.</p>
+                  <p className="text-sm text-zinc-500">{t("job_form.no_databases")}</p>
                 ) : (
                   <div className="grid max-h-48 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
                     {knownDatabases.map((db) => (
@@ -189,7 +204,7 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
                         key={db}
                         checked={form.databases.includes(db)}
                         onChange={() => update("databases", toggle(form.databases, db))}
-                        label={db}
+                        label={<bdi>{db}</bdi>}
                       />
                     ))}
                   </div>
@@ -198,48 +213,41 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
                   <Input
                     value={extraDb}
                     onChange={(e) => setExtraDb(e.target.value)}
-                    placeholder="other database name"
+                    placeholder={t("job_form.other_database")}
                     className="h-8"
+                    dir="auto"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        if (extraDb.trim()) update("databases", Array.from(new Set([...form.databases, extraDb.trim()])));
-                        setExtraDb("");
+                        addExtraDatabase();
                       }
                     }}
                   />
-                  <Button
-                    size="sm"
-                    icon={<Plus />}
-                    onClick={() => {
-                      if (extraDb.trim()) update("databases", Array.from(new Set([...form.databases, extraDb.trim()])));
-                      setExtraDb("");
-                    }}
-                  >
-                    Add
+                  <Button size="sm" icon={<Plus />} onClick={addExtraDatabase}>
+                    {t("common.add")}
                   </Button>
                 </div>
               </div>
             )}
           </div>
 
-          <Field label="Format">
+          <Field label={t("common.format")}>
             <div>
               <Segmented<BackupFormat>
                 value={form.format}
                 onChange={(v) => update("format", v)}
                 options={[
-                  { value: "zip", label: "ZIP with filestore" },
-                  { value: "dump", label: "pg_dump only" },
+                  { value: "zip", label: t("format.zip") },
+                  { value: "dump", label: t("format.dump") },
                 ]}
               />
             </div>
           </Field>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium">Destinations</p>
+            <p className="text-sm font-medium">{t("common.destinations")}</p>
             {destinations.length === 0 ? (
-              <p className="text-sm text-zinc-500">No destination yet: create one on the Destinations page.</p>
+              <p className="text-sm text-zinc-500">{t("job_form.no_destinations")}</p>
             ) : (
               <div className="space-y-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
                 {destinations.map((d) => (
@@ -249,20 +257,20 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
                     onChange={() => update("destination_ids", toggle(form.destination_ids, d.id))}
                     label={
                       <span className="inline-flex items-center gap-1.5">
-                        <DestinationIcon kind={d.kind} className="text-zinc-500" /> {d.name}
+                        <DestinationIcon kind={d.kind} className="text-zinc-500" /> <bdi>{d.name}</bdi>
                       </span>
                     }
                   />
                 ))}
               </div>
             )}
-            <p className="text-xs text-zinc-500">Each backup is uploaded to every selected destination (3-2-1 rule).</p>
+            <p className="text-xs text-zinc-500">{t("job_form.destinations_hint")}</p>
           </div>
         </div>
 
         <div className="space-y-5">
           <div className="space-y-3">
-            <p className="text-sm font-medium">Schedule</p>
+            <p className="text-sm font-medium">{t("job_form.schedule")}</p>
             <div className="flex flex-wrap gap-1.5">
               {PRESETS.map((preset) => (
                 <button
@@ -275,16 +283,22 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
                       : "rounded-md bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                   }
                 >
-                  {preset.label}
+                  {t(preset.label)}
                 </button>
               ))}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Cron expression" hint="minute hour day month weekday">
-                <Input value={form.cron} onChange={(e) => update("cron", e.target.value)} className="font-mono" required />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label={t("job_form.cron")} hint={t("job_form.cron_hint")}>
+                <Input
+                  value={form.cron}
+                  onChange={(e) => update("cron", e.target.value)}
+                  className="font-mono"
+                  dir="ltr"
+                  required
+                />
               </Field>
-              <Field label="Time zone">
-                <Select value={form.timezone} onChange={(e) => update("timezone", e.target.value)}>
+              <Field label={t("job_form.timezone")}>
+                <Select value={form.timezone} onChange={(e) => update("timezone", e.target.value)} dir="ltr">
                   {(tzList.includes(form.timezone) ? tzList : [form.timezone, ...tzList]).map((tz) => (
                     <option key={tz} value={tz}>
                       {tz}
@@ -297,32 +311,34 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
               {preview.data?.valid ? (
                 <>
                   <p className="flex items-center gap-2 font-medium">
-                    <CalendarClock className="size-4 text-brand-600" /> {preview.data.description}
+                    <CalendarClock className="size-4 shrink-0 text-brand-600" /> {preview.data.description}
                   </p>
                   <ul className="mt-2 space-y-0.5 text-xs text-zinc-500">
                     {preview.data.next.map((n) => (
                       <li key={n}>
                         {formatInZone(n, form.timezone)}
-                        <span className="ml-1.5 opacity-70">({formatDateTime(n)} your time)</span>
+                        <span className="ms-1.5 opacity-70">{t("job_form.your_time", { when: formatDateTime(n) })}</span>
                       </li>
                     ))}
                   </ul>
                 </>
               ) : (
-                <p className="text-rose-600 dark:text-rose-400">{preview.data?.error ?? "Enter a cron expression"}</p>
+                <p className="text-rose-600 dark:text-rose-400">
+                  {preview.data?.error ? ts(preview.data.error) : t("job_form.enter_cron")}
+                </p>
               )}
             </div>
           </div>
 
           <div className="space-y-3">
             <div className="flex items-baseline justify-between gap-2">
-              <p className="text-sm font-medium">Retention</p>
+              <p className="text-sm font-medium">{t("job_form.retention")}</p>
               <Badge tone="violet">{retentionSummary(form)}</Badge>
             </div>
             <div className="grid grid-cols-5 gap-2">
               {RETENTION_FIELDS.map((field) => (
                 <label key={field.key} className="space-y-1 text-center">
-                  <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">{field.label}</span>
+                  <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">{t(field.label)}</span>
                   <Input
                     type="number"
                     min={0}
@@ -331,29 +347,37 @@ export function JobForm({ job, open, onClose }: { job: Job | null; open: boolean
                     onChange={(e) => update(field.key, Math.max(0, Number(e.target.value)))}
                     className="text-center"
                   />
-                  <span className="block text-[11px] text-zinc-500">{field.hint}</span>
+                  <span className="block text-[11px] text-zinc-500">{t(field.hint)}</span>
                 </label>
               ))}
             </div>
-            <p className="text-xs text-zinc-500">
-              Older backups are deleted from the destinations after each successful run. The newest backup is always
-              kept; all zeros keeps everything.
-            </p>
+            <p className="text-xs text-zinc-500">{t("job_form.retention_hint")}</p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Retries" hint="Download attempts after network errors.">
-              <Input type="number" min={0} max={10} value={form.retries} onChange={(e) => update("retries", Number(e.target.value))} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label={t("job_form.retries")} hint={t("job_form.retries_hint")}>
+              <Input
+                type="number"
+                min={0}
+                max={10}
+                value={form.retries}
+                onChange={(e) => update("retries", Number(e.target.value))}
+              />
             </Field>
           </div>
           <div className="space-y-3">
             <Switch
               checked={form.verify_archive}
               onChange={(v) => update("verify_archive", v)}
-              label="Deep archive verification"
-              description="Read every file of the ZIP to validate its CRC before uploading."
+              label={t("job_form.verify")}
+              description={t("job_form.verify_hint")}
             />
-            <Switch checked={form.enabled} onChange={(v) => update("enabled", v)} label="Enabled" description="Disabled jobs only run when started manually." />
+            <Switch
+              checked={form.enabled}
+              onChange={(v) => update("enabled", v)}
+              label={t("job_form.enabled")}
+              description={t("job_form.enabled_hint")}
+            />
           </div>
         </div>
       </form>

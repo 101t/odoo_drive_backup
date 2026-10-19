@@ -11,6 +11,7 @@ use croner::Cron;
 use tokio::task::JoinHandle;
 
 use crate::db::{self, JobRow};
+use crate::i18n::{Arabic, Lang};
 use crate::state::AppState;
 
 pub fn parse_cron(expression: &str) -> anyhow::Result<Cron> {
@@ -54,8 +55,15 @@ pub fn upcoming(
     Ok(out)
 }
 
-pub fn describe(expression: &str) -> String {
-    parse_cron(expression).map(|c| c.describe()).unwrap_or_default()
+/// Human-readable description of a schedule, e.g. "At 02:00, on Monday and Friday."
+pub fn describe(expression: &str, lang: Lang) -> String {
+    let Ok(cron) = parse_cron(expression) else {
+        return String::new();
+    };
+    match lang {
+        Lang::En => cron.describe(),
+        Lang::Ar => Arabic::polish(&cron.describe_lang(Arabic)),
+    }
 }
 
 pub fn spawn(state: AppState) -> JoinHandle<()> {
@@ -84,18 +92,18 @@ pub fn spawn(state: AppState) -> JoinHandle<()> {
 
 async fn fill_missing_next_runs(state: &AppState) -> anyhow::Result<()> {
     let jobs: Vec<JobRow> =
-        sqlx::query_as("SELECT * FROM jobs WHERE enabled = 1 AND next_run_at IS NULL").fetch_all(&state.db).await?;
+        db::query_as("SELECT * FROM jobs WHERE enabled = TRUE AND next_run_at IS NULL").fetch_all(&state.db).await?;
     for job in jobs {
         let next = next_run(&job.cron, &job.timezone, Utc::now()).ok();
-        sqlx::query("UPDATE jobs SET next_run_at = ? WHERE id = ?").bind(next).bind(job.id).execute(&state.db).await?;
+        db::query("UPDATE jobs SET next_run_at = ? WHERE id = ?").bind(next).bind(job.id).execute(&state.db).await?;
     }
     Ok(())
 }
 
 async fn tick(state: &AppState) -> anyhow::Result<()> {
     let now = Utc::now();
-    let due: Vec<JobRow> = sqlx::query_as(
-        "SELECT * FROM jobs WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at",
+    let due: Vec<JobRow> = db::query_as(
+        "SELECT * FROM jobs WHERE enabled = TRUE AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at",
     )
     .bind(now)
     .fetch_all(&state.db)
@@ -110,7 +118,7 @@ async fn tick(state: &AppState) -> anyhow::Result<()> {
                 None
             }
         };
-        sqlx::query("UPDATE jobs SET next_run_at = ?, last_run_at = ? WHERE id = ?")
+        db::query("UPDATE jobs SET next_run_at = ?, last_run_at = ? WHERE id = ?")
             .bind(next)
             .bind(now)
             .bind(job.id)
@@ -143,7 +151,7 @@ async fn housekeeping(state: &AppState) {
         .unwrap_or(90);
     if days > 0 {
         let cutoff = Utc::now() - chrono::Duration::days(days);
-        if let Err(err) = sqlx::query("DELETE FROM run_logs WHERE ts < ?").bind(cutoff).execute(&state.db).await {
+        if let Err(err) = db::query("DELETE FROM run_logs WHERE ts < ?").bind(cutoff).execute(&state.db).await {
             tracing::warn!(error = %err, "log cleanup failed");
         }
     }
@@ -178,6 +186,6 @@ mod tests {
         assert!(parse_cron("0 25 * * *").is_err());
         assert!(parse_cron("* * * * * *").is_err());
         assert!(parse_timezone("Mars/Base").is_err());
-        assert!(!describe("0 2 * * 0").is_empty());
+        assert!(!describe("0 2 * * 0", Lang::En).is_empty());
     }
 }

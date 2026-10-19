@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { errorMessage } from "../api/client";
 import { useInstances, useRestore } from "../api/hooks";
 import type { Artifact, Run } from "../api/types";
+import { useT } from "../i18n";
 import { useToast } from "./toast";
 import { Alert, Button, Field, Input, Modal, Select, Switch } from "./ui";
 
@@ -23,6 +24,7 @@ export function RestoreDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   const { data: instances = [] } = useInstances();
   const restore = useRestore();
   const toast = useToast();
@@ -56,7 +58,10 @@ export function RestoreDialog({
         copy,
         neutralize,
       });
-      toast.success("Restore started", `Restoring into ${target?.name} as "${database.trim()}"`);
+      toast.success(
+        t("restore.started"),
+        t("restore.started_hint", { instance: target?.name ?? "", database: database.trim() }),
+      );
       onClose();
       navigate(`/runs/${result.run_id}`);
     } catch {
@@ -68,12 +73,16 @@ export function RestoreDialog({
     <Modal
       open={open}
       onClose={onClose}
-      title="Restore backup"
-      description={`${run.instance_name} / ${run.database} — from ${artifact.destination_name}`}
+      title={t("restore.title")}
+      description={t("restore.description", {
+        instance: run.instance_name,
+        database: run.database,
+        destination: artifact.destination_name,
+      })}
       size="lg"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button
             variant="primary"
             icon={<RotateCcw />}
@@ -81,62 +90,59 @@ export function RestoreDialog({
             disabled={!target || !validName || exists}
             onClick={submit}
           >
-            Restore as new database
+            {t("restore.submit")}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        {restore.error && <Alert tone="red" title="Could not start the restore">{errorMessage(restore.error)}</Alert>}
-        <Alert tone="blue" icon={<TriangleAlert />} title="Restores never overwrite">
-          The backup is restored into a new database through Odoo's database manager. Existing databases are left
-          untouched. Use this to test your backups regularly.
+        {restore.error && (
+          <Alert tone="red" title={t("restore.failed")}>
+            {errorMessage(restore.error)}
+          </Alert>
+        )}
+        <Alert tone="blue" icon={<TriangleAlert />} title={t("restore.never_overwrite")}>
+          {t("restore.never_overwrite_hint")}
         </Alert>
 
-        <Field label="Target instance">
+        <Field label={t("restore.target")}>
           <Select value={instanceId} onChange={(e) => setInstanceId(Number(e.target.value))}>
             {instances.map((i) => (
               <option key={i.id} value={i.id}>
-                {i.name} {i.odoo_version ? `(Odoo ${i.odoo_version})` : ""}
+                {i.odoo_version ? t("restore.target_option", { name: i.name, version: i.odoo_version }) : i.name}
               </option>
             ))}
           </Select>
         </Field>
 
         <Field
-          label="New database name"
-          error={
-            !validName
-              ? "Use letters, digits, '_', '-' or '.', starting with a letter or digit"
-              : exists
-                ? "A database with this name already exists on the target"
-                : undefined
+          label={t("restore.name")}
+          error={!validName ? t("restore.name_invalid") : exists ? t("restore.name_exists") : undefined}
+          hint={
+            run.odoo_version &&
+            target?.odoo_version &&
+            !target.odoo_version.startsWith(run.odoo_version.split(".")[0]) ? (
+              <span className="text-amber-600">
+                {t("restore.version_mismatch", { source: run.odoo_version, target: target.odoo_version })}
+              </span>
+            ) : undefined
           }
-          hint={run.odoo_version && target?.odoo_version && !target.odoo_version.startsWith(run.odoo_version.split(".")[0]) ? (
-            <span className="text-amber-600">
-              The backup comes from Odoo {run.odoo_version}, the target runs {target.odoo_version}.
-            </span>
-          ) : undefined}
         >
-          <Input value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false} />
+          <Input value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false} dir="ltr" />
         </Field>
 
         <div className="space-y-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
           <Switch
             checked={copy}
             onChange={setCopy}
-            label="This database is a copy"
-            description={
-              sameAsSource
-                ? "Recommended on the same server: generates a new database UUID so the copy does not conflict with the original (enterprise subscription, mail gateways…)."
-                : "Generates a new database UUID. Turn off only when this restore replaces the original server (disaster recovery)."
-            }
+            label={t("restore.copy")}
+            description={sameAsSource ? t("restore.copy_same_server") : t("restore.copy_other_server")}
           />
           <Switch
             checked={neutralize}
             onChange={setNeutralize}
-            label="Neutralize (Odoo 16+)"
-            description="Disables outgoing mail servers, scheduled actions, payment providers and other integrations in the restored database."
+            label={t("restore.neutralize")}
+            description={t("restore.neutralize_hint")}
           />
         </div>
       </div>

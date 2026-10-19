@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow, bail};
 use tokio_util::sync::CancellationToken;
 
 use super::{EngineInner, Outcome, TempFile};
-use crate::db::{RestoreOptions, Run, get_artifact, get_destination, get_instance, get_run, status};
+use crate::db::{self, RestoreOptions, Run, get_artifact, get_destination, get_instance, get_run, status};
 use crate::odoo::{OdooClient, OdooError};
 use crate::storage::Storage;
 use crate::util::{Cancelled, format_bytes, format_duration, format_rate};
@@ -117,7 +117,7 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
 
     // Refresh the cached database list of the instance (best effort).
     if let Ok(list) = client.list_databases().await {
-        let _ = sqlx::query("UPDATE instances SET databases_json = ? WHERE id = ?")
+        let _ = db::query("UPDATE instances SET databases_json = ? WHERE id = ?")
             .bind(serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()))
             .bind(instance.id)
             .execute(&engine.db)

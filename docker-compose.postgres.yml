@@ -1,0 +1,55 @@
+# Odoo Backup with its application data in PostgreSQL instead of the SQLite file.
+#
+#   echo "ODB_DB_PASSWORD=$(openssl rand -hex 24)" > .env
+#   docker compose -f docker-compose.postgres.yml up -d --build
+#
+# To use an existing PostgreSQL server instead, drop the "db" service and point ODB_DATABASE_URL at it.
+services:
+  odoo-backup:
+    build: .
+    image: odoo-backup:latest
+    restart: unless-stopped
+    # Lets running backups wind down and record their state on shutdown.
+    stop_grace_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      ODB_DATABASE_URL: "postgres://odoo_backup:${ODB_DB_PASSWORD:?set ODB_DB_PASSWORD in .env}@db:5432/odoo_backup"
+      # Address users open in their browser. Needed for Google OAuth and for links in notifications.
+      ODB_PUBLIC_URL: "http://localhost:8080"
+      # Set to "true" when served over HTTPS (behind a reverse proxy).
+      ODB_COOKIE_SECURE: "false"
+      ODB_MAX_CONCURRENT_JOBS: "2"
+      # Recommended with PostgreSQL: keep the encryption key with your secrets rather than in the /data volume.
+      # Generate one with: docker compose -f docker-compose.postgres.yml run --rm --no-deps odoo-backup generate-key
+      # ODB_SECRET_KEY: ""
+      # Optional: enable Prometheus metrics at /metrics (Authorization: Bearer <token>).
+      # ODB_METRICS_TOKEN: ""
+    volumes:
+      # Temporary buffers (and secret.key unless ODB_SECRET_KEY is set).
+      - odoo-backup-data:/data
+      # Target for "Local folder" destinations (use path /backups in the UI).
+      - odoo-backup-files:/backups
+
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: odoo_backup
+      POSTGRES_USER: odoo_backup
+      POSTGRES_PASSWORD: "${ODB_DB_PASSWORD:?set ODB_DB_PASSWORD in .env}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo_backup -d odoo_backup"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - odoo-backup-db:/var/lib/postgresql
+
+volumes:
+  odoo-backup-data:
+  odoo-backup-files:
+  odoo-backup-db:

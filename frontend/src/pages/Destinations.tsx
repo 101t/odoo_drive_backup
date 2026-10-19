@@ -9,6 +9,7 @@ import { DestinationIcon } from "../components/RunBits";
 import { TestReportView } from "../components/TestReportView";
 import { useToast } from "../components/toast";
 import { Alert, Badge, Button, Card, EmptyState, IconButton, LoadingBlock, Modal, Mono, PageHeader, Spinner } from "../components/ui";
+import { t, ts, useT } from "../i18n";
 import { formatBytes } from "../lib/format";
 import { DestinationForm } from "./DestinationForm";
 
@@ -26,9 +27,19 @@ function Details({ destination }: { destination: Destination }) {
   return (
     <div className="space-y-1 text-xs text-zinc-500">
       <p className="truncate">
-        {c.auth === "service_account" ? "Service account" : "OAuth"}
-        {account ? ` · ${account}` : ""}
-        {c.impersonate ? ` → ${c.impersonate}` : ""}
+        {c.auth === "service_account" ? t("destinations.service_account") : t("destinations.oauth")}
+        {account ? (
+          <>
+            {" · "}
+            <bdi>{account}</bdi>
+          </>
+        ) : null}
+        {c.impersonate ? (
+          <>
+            {" "}
+            {t("destinations.acting_as")} <bdi>{c.impersonate}</bdi>
+          </>
+        ) : null}
       </p>
       {c.folder_id ? (
         <a
@@ -37,17 +48,20 @@ function Details({ destination }: { destination: Destination }) {
           rel="noreferrer"
           className="inline-flex max-w-full items-center gap-1 hover:text-brand-600"
         >
-          <span className="truncate">Folder {c.folder_id}</span>
+          <span className="truncate">
+            {t("destinations.folder")} <bdi>{c.folder_id}</bdi>
+          </span>
           <ExternalLink className="size-3 shrink-0" />
         </a>
       ) : (
-        <p>My Drive / Odoo Backups</p>
+        <p>{t("destinations.default_folder")}</p>
       )}
     </div>
   );
 }
 
 export function DestinationsPage() {
+  const t = useT();
   const { data: destinations, isLoading } = useDestinations();
   const remove = useDeleteDestination();
   const test = useTestDestination();
@@ -62,10 +76,10 @@ export function DestinationsPage() {
   useEffect(() => {
     const connected = params.get("connected");
     const oauthError = params.get("oauth_error");
-    if (connected) toast.success("Google account connected", "Run a test to confirm uploads work.");
-    if (oauthError) toast.error("Google authorization failed", oauthError);
+    if (connected) toast.success(t("destinations.connected_toast"), t("destinations.connected_hint"));
+    if (oauthError) toast.error(t("destinations.oauth_failed"), ts(oauthError));
     if (connected || oauthError) setParams({}, { replace: true });
-  }, [params, setParams, toast]);
+  }, [params, setParams, toast, t]);
 
   const openForm = (destination: Destination | null) => {
     setEditing(destination);
@@ -78,7 +92,10 @@ export function DestinationsPage() {
       const report = await test.mutateAsync(destination.id);
       setTesting({ destination, report });
     } catch (error) {
-      setTesting({ destination, report: { ok: false, steps: [{ name: "Request", status: "fail", detail: errorMessage(error) }] } });
+      setTesting({
+        destination,
+        report: { ok: false, steps: [{ name: t("destinations.request"), status: "fail", detail: errorMessage(error) }] },
+      });
     }
   };
 
@@ -87,34 +104,34 @@ export function DestinationsPage() {
       const { url } = await startOAuth.mutateAsync(destination.id);
       window.location.href = url;
     } catch (error) {
-      toast.error("Cannot start the Google authorization", errorMessage(error));
+      toast.error(t("destinations.oauth_start_failed"), errorMessage(error));
     }
   };
 
   const del = async (destination: Destination) => {
     const { confirmed } = await confirm({
-      title: `Delete ${destination.name}?`,
-      message: "Files already stored there are not deleted, but they can no longer be downloaded or restored from this app.",
-      confirmLabel: "Delete destination",
+      title: t("destinations.delete_title", { name: destination.name }),
+      message: t("destinations.delete_message"),
+      confirmLabel: t("destinations.delete_confirm"),
       danger: true,
     });
     if (!confirmed) return;
     try {
       await remove.mutateAsync(destination.id);
-      toast.success(`${destination.name} deleted`);
+      toast.success(t("destinations.deleted", { name: destination.name }));
     } catch (error) {
-      toast.error("Cannot delete", errorMessage(error));
+      toast.error(t("common.cannot_delete"), errorMessage(error));
     }
   };
 
   return (
     <>
       <PageHeader
-        title="Destinations"
-        description="Google Drive folders and local/NAS directories receiving the backups."
+        title={t("destinations.title")}
+        description={t("destinations.description")}
         actions={
           <Button variant="primary" icon={<Plus />} onClick={() => openForm(null)}>
-            Add destination
+            {t("destinations.add")}
           </Button>
         }
       />
@@ -125,11 +142,11 @@ export function DestinationsPage() {
         <Card>
           <EmptyState
             icon={<Cloud />}
-            title="No destination yet"
-            description="Store backups on Google Drive (Shared Drive with a service account, or your own account via OAuth) and/or on a local disk or NAS mount. Keep at least one copy off-site."
+            title={t("destinations.empty")}
+            description={t("destinations.empty_hint")}
             action={
               <Button variant="primary" icon={<Plus />} onClick={() => openForm(null)}>
-                Add destination
+                {t("destinations.add")}
               </Button>
             }
           />
@@ -146,35 +163,43 @@ export function DestinationsPage() {
                       <DestinationIcon kind={destination.kind} className="size-5" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-semibold">{destination.name}</p>
+                      <p className="truncate font-semibold">
+                        <bdi>{destination.name}</bdi>
+                      </p>
                       <Details destination={destination} />
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    <Badge tone="gray">{destination.kind === "gdrive" ? "Google Drive" : "Local folder"}</Badge>
-                    {oauth && !destination.connected && <Badge tone="amber">Not connected</Badge>}
-                    {oauth && destination.connected && <Badge tone="green">Connected</Badge>}
-                    {destination.job_count > 0 && <Badge tone="violet">{destination.job_count} job(s)</Badge>}
+                    <Badge tone="gray">
+                      {destination.kind === "gdrive" ? t("destinations.google_drive") : t("destinations.local_folder")}
+                    </Badge>
+                    {oauth && !destination.connected && <Badge tone="amber">{t("destinations.not_connected")}</Badge>}
+                    {oauth && destination.connected && <Badge tone="green">{t("destinations.connected")}</Badge>}
+                    {destination.job_count > 0 && (
+                      <Badge tone="violet">{t("destinations.jobs", { count: destination.job_count })}</Badge>
+                    )}
                   </div>
                   <p className="text-sm text-zinc-600 dark:text-zinc-300">
-                    <span className="font-semibold tabular-nums">{formatBytes(destination.stored_bytes)}</span> in{" "}
-                    {destination.stored_files} backup file(s)
+                    {t("destinations.usage", {
+                      size: formatBytes(destination.stored_bytes),
+                      files: t("count.backup_files", { count: destination.stored_files }),
+                    })}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 border-t border-zinc-100 px-3 py-2 dark:border-zinc-800">
                   <Button size="sm" variant="ghost" icon={<FlaskConical />} onClick={() => runTest(destination)}>
-                    Test
+                    {t("destinations.test")}
                   </Button>
                   {oauth && (
                     <Button size="sm" variant="ghost" icon={<KeyRound />} onClick={() => connect(destination)}>
-                      {destination.connected ? "Reconnect" : "Connect"}
+                      {destination.connected ? t("destinations.reconnect") : t("destinations.connect")}
                     </Button>
                   )}
                   <div className="flex-1" />
-                  <IconButton label="Edit" onClick={() => openForm(destination)}>
+                  <IconButton label={t("common.edit")} onClick={() => openForm(destination)}>
                     <Pencil />
                   </IconButton>
-                  <IconButton label="Delete" tone="danger" onClick={() => del(destination)}>
+                  <IconButton label={t("common.delete")} tone="danger" onClick={() => del(destination)}>
                     <Trash />
                   </IconButton>
                 </div>
@@ -189,18 +214,21 @@ export function DestinationsPage() {
       <Modal
         open={testing !== null}
         onClose={() => setTesting(null)}
-        title={`Testing ${testing?.destination.name ?? ""}`}
-        description="Authenticates, checks the folder and writes then deletes a small file."
-        footer={<Button onClick={() => setTesting(null)}>Close</Button>}
+        title={t("destinations.testing", { name: testing?.destination.name ?? "" })}
+        description={t("destinations.testing_hint")}
+        footer={<Button onClick={() => setTesting(null)}>{t("common.close")}</Button>}
       >
         {testing?.report ? (
           <div className="space-y-4">
-            <Alert tone={testing.report.ok ? "green" : "red"} title={testing.report.ok ? "Destination works" : "The destination is not usable"} />
+            <Alert
+              tone={testing.report.ok ? "green" : "red"}
+              title={testing.report.ok ? t("destinations.test_ok") : t("destinations.test_failed")}
+            />
             <TestReportView report={testing.report} />
           </div>
         ) : (
           <div className="flex items-center gap-3 py-6 text-sm text-zinc-500">
-            <Spinner /> Running checks…
+            <Spinner /> {t("destinations.running_checks")}
           </div>
         )}
       </Modal>

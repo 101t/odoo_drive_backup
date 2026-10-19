@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { CircleCheck, CircleX, Info, X } from "lucide-react";
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { useT } from "../i18n";
 
 type ToastTone = "success" | "error" | "info";
 
@@ -22,9 +23,10 @@ const ToastContext = createContext<ToastApi | null>(null);
 let nextId = 1;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   const [items, setItems] = useState<ToastItem[]>([]);
 
-  const dismiss = useCallback((id: number) => setItems((list) => list.filter((t) => t.id !== id)), []);
+  const dismiss = useCallback((id: number) => setItems((list) => list.filter((item) => item.id !== id)), []);
 
   const push = useCallback(
     (tone: ToastTone, title: string, message?: string) => {
@@ -65,7 +67,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             </div>
             <button
               type="button"
-              aria-label="Dismiss"
+              aria-label={t("common.dismiss")}
               onClick={() => dismiss(toast.id)}
               className="shrink-0 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
             >

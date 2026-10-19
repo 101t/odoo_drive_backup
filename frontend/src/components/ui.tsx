@@ -10,6 +10,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
+import { useT } from "../i18n";
 
 // ---------------------------------------------------------------- buttons
 
@@ -274,7 +275,7 @@ export function ProgressBar({ value, className }: { value: number | null; classN
   return (
     <div className={clsx("h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800", className)}>
       {value === null ? (
-        <div className="h-full w-2/5 animate-progress rounded-full bg-brand-500" />
+        <div className="h-full w-2/5 animate-progress rounded-full bg-brand-500 rtl:animate-progress-rtl" />
       ) : (
         <div
           className="h-full rounded-full bg-brand-500 transition-[width] duration-500"
@@ -302,7 +303,7 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
 
 export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select className={clsx(inputClass, "pr-8", className)} {...props}>
+    <select className={clsx(inputClass, "pe-8", className)} {...props}>
       {children}
     </select>
   );
@@ -363,8 +364,8 @@ export function Switch({
       >
         <span
           className={clsx(
-            "absolute top-0.5 size-4 rounded-full bg-white shadow transition-transform",
-            checked ? "translate-x-[18px]" : "translate-x-0.5",
+            "absolute start-0.5 top-0.5 size-4 rounded-full bg-white shadow transition-transform",
+            checked && "translate-x-4 rtl:-translate-x-4",
           )}
         />
       </button>
@@ -438,11 +439,12 @@ export function Segmented<T extends string>({
   );
 }
 
-export function CopyButton({ value, label = "Copy" }: { value: string; label?: string }) {
+export function CopyButton({ value, label }: { value: string; label?: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   return (
     <IconButton
-      label={copied ? "Copied" : label}
+      label={copied ? t("common.copied") : (label ?? t("common.copy"))}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(value);
@@ -495,6 +497,7 @@ export function Modal({
     };
   }, [open, onClose]);
 
+  const t = useT();
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 overflow-y-auto">
@@ -517,7 +520,7 @@ export function Modal({
               <h2 className="text-base font-semibold">{title}</h2>
               {description && <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{description}</p>}
             </div>
-            <IconButton label="Close" onClick={onClose} className="-mr-2 -mt-1">
+            <IconButton label={t("common.close")} onClick={onClose} className="-me-2 -mt-1">
               <X />
             </IconButton>
           </div>
@@ -586,14 +589,19 @@ export function Stat({
   );
 }
 
+/** Technical value (path, hash, URL, cron): always laid out left-to-right. */
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={clsx("font-mono text-xs", className)}>{children}</span>;
+  return (
+    <span dir="ltr" className={clsx("font-mono text-xs", className)}>
+      {children}
+    </span>
+  );
 }
 
 export const tableClass = {
   wrapper: "overflow-x-auto scrollbar-thin",
   table: "min-w-full text-sm",
-  head: "border-b border-zinc-200 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400",
+  head: "border-b border-zinc-200 text-start text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400",
   th: "whitespace-nowrap px-4 py-2.5 font-medium",
   row: "border-b border-zinc-100 last:border-0 dark:border-zinc-800/70",
   td: "px-4 py-3 align-middle",

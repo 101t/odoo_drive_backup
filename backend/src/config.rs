@@ -12,6 +12,11 @@ pub struct Config {
     #[arg(long, env = "ODB_DATA_DIR", default_value = "./data")]
     pub data_dir: PathBuf,
 
+    /// Keep the application data in PostgreSQL instead of the SQLite file in the data directory,
+    /// e.g. postgres://user:password@host:5432/odoo_backup (`?sslmode=require` for TLS).
+    #[arg(long, env = "ODB_DATABASE_URL", hide_env_values = true)]
+    pub database_url: Option<String>,
+
     /// Where backups are buffered while they travel from Odoo to the destinations.
     /// Needs enough free space for the largest backup. Defaults to `<data_dir>/tmp`.
     #[arg(long, env = "ODB_TEMP_DIR")]

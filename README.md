@@ -1,7 +1,8 @@
 # Odoo Backup
 
 Automated, verified backups of any number of Odoo instances to Google Drive and local/NAS storage,
-with a web dashboard. One self-contained binary (Rust + embedded React UI), one SQLite file, one Docker image.
+with a web dashboard. One self-contained binary (Rust + embedded React UI), one Docker image, and the application
+data in a SQLite file or in PostgreSQL.
 
 - **Any Odoo, no addon required.** Uses Odoo's own database manager (`/web/database/backup`), the same
   endpoint as the *Backup* button. Works with Odoo 12 to 18, Community and Enterprise, on-premise or Odoo.sh-style
@@ -26,6 +27,8 @@ with a web dashboard. One self-contained binary (Rust + embedded React UI), one 
   Server-Sent Events, full logs per run, history, downloads.
 - **Alerts** through Slack/Mattermost/Google Chat/Discord webhooks, Telegram or e-mail (SMTP). Also a Prometheus
   `/metrics` endpoint and `/api/health`.
+- **English and Arabic UI**, with a full right-to-left layout in Arabic.
+- **SQLite or PostgreSQL** for the application data: zero setup by default, or a managed PostgreSQL server.
 - **Secure by default.**
   - Master passwords, keys and tokens are encrypted at rest (AES-256-GCM).
   - Login uses Argon2id hashes with lockout on repeated failures.
@@ -47,7 +50,7 @@ with a web dashboard. One self-contained binary (Rust + embedded React UI), one 
               │           ► local / NAS folder (atomic rename)           │
               │  4. GFS retention, 5. notifications, 6. delete temp file │
               │                                                          │
-              │  SQLite: instances, destinations, jobs, runs, logs       │
+              │  SQLite or PostgreSQL: instances, jobs, runs, logs…      │
               └──────────────────────────────────────────────────────────┘
 ```
 
@@ -77,6 +80,49 @@ Then, in the UI:
 make build                      # needs Node 22+ and Rust 1.88+
 ./target/release/odoo-backup --data-dir /var/lib/odoo-backup serve
 ```
+
+## Application database: SQLite or PostgreSQL
+
+By default everything the app knows (instances, destinations, jobs, run history, logs, users, settings) is kept in
+`<ODB_DATA_DIR>/odoo-backup.db`, a SQLite file that needs no setup.
+
+To keep it in PostgreSQL instead (PostgreSQL 12 or newer), set `ODB_DATABASE_URL`:
+
+```bash
+ODB_DATABASE_URL=postgres://odoo_backup:secret@db.example.com:5432/odoo_backup
+# TLS: add ?sslmode=require (or verify-full&sslrootcert=/path/ca.pem)
+```
+
+A ready-to-use stack with its own PostgreSQL container:
+
+```bash
+echo "ODB_DB_PASSWORD=$(openssl rand -hex 24)" > .env
+docker compose -f docker-compose.postgres.yml up -d --build
+```
+
+Notes:
+
+- The schema is created and upgraded automatically at startup. The database must exist and the user must be
+  allowed to create tables in it.
+- **Run a single server per database.** The server holds a PostgreSQL advisory lock and a second one refuses to
+  start, because two schedulers would run every backup twice.
+- **The data directory is still needed** for temporary buffers and `secret.key`. With PostgreSQL, prefer passing the
+  key with `ODB_SECRET_KEY` so the database and the key are backed up and restored together. The server refuses to
+  start with a key that does not match the database.
+- Use a dedicated database and role, not the ones of your Odoo server: Odoo lists every database its role can
+  access, so the app's database would appear among the databases to back up.
+- Switching an existing installation from SQLite to PostgreSQL does not copy the data. Start with an empty
+  database and recreate the instances, destinations and jobs; old backup files stay where they are.
+
+## Languages
+
+The UI is available in **English** and **Arabic** (العربية); in Arabic the whole layout is right-to-left. The
+language is detected from the browser and can be switched from the sidebar or the sign-in page; the choice is
+remembered per browser.
+
+Technical values (URLs, paths, database names, cron expressions, hashes) always read left to right. Run logs and
+error messages are stored in English, so they stay searchable and easy to share, and are translated when they are
+displayed. Notification messages (e-mail, chat) are sent in English.
 
 ## Odoo requirements
 
@@ -167,6 +213,7 @@ Every option is an environment variable (or the matching `--flag`).
 |---|---|---|
 | `ODB_BIND` | `0.0.0.0:8080` | Listen address |
 | `ODB_DATA_DIR` | `./data` (`/data` in Docker) | SQLite database, `secret.key`, temp files |
+| `ODB_DATABASE_URL` | – | `postgres://user:password@host:5432/db` to keep the application data in PostgreSQL instead of SQLite |
 | `ODB_TEMP_DIR` | `<data>/tmp` | Buffer for archives in transit. Needs free space for the largest backup × parallel runs |
 | `ODB_SECRET_KEY` | generated | Base64 32-byte key encrypting stored secrets |
 | `ODB_MAX_CONCURRENT_JOBS` | `2` | Parallel runs (one at a time per Odoo instance in any case) |
@@ -223,16 +270,28 @@ make test            # cargo test (unit + mock Google Drive + mock storage) and 
 make lint
 ```
 
+The database tests run on SQLite, and also on PostgreSQL when `ODB_TEST_POSTGRES_URL` points at a server where the
+user may create databases (a throwaway database is created and dropped):
+
+```bash
+ODB_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres cargo test db::
+```
+
 ```text
-backend/            Rust (Axum, SQLx/SQLite, Tokio)
-  migrations/       SQL schema
+backend/            Rust (Axum, SQLx, Tokio)
+  migrations/       SQL schema, one folder per engine (sqlite/, postgres/)
+  src/db/           SQLite/PostgreSQL access: queries are written once and run on both
   src/api/          REST handlers, SSE, metrics
   src/engine/       queue, backup and restore pipelines, verification, GFS retention
   src/odoo/         database-manager client
   src/storage/      Google Drive (resumable upload) and local destinations
   src/scheduler.rs  cron scheduling and housekeeping
 frontend/           React 19, TypeScript, Tailwind CSS 4, TanStack Query
+  src/i18n/         en.ts (source), ar.ts (typed: a missing key fails the build), server.ts (server messages)
 ```
+
+To add a language, copy `ar.ts`, translate it, register it in `src/i18n/index.ts`, and give it a catalog of
+server messages like `server.ts`.
 
 The release build embeds `frontend/dist` into the binary (`rust-embed`), so `make build` produces a single file
 to deploy.

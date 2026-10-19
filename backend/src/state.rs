@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::LoginLimiter;
 use crate::config::Config;
 use crate::crypto::Crypto;
+use crate::db::Db;
 use crate::engine::Engine;
 use crate::events::EventBus;
 use crate::storage::StorageContext;
@@ -23,7 +23,7 @@ pub struct PendingOAuth {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: SqlitePool,
+    pub db: Db,
     pub config: Arc<Config>,
     pub crypto: Arc<Crypto>,
     pub events: EventBus,
