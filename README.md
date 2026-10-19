@@ -61,6 +61,10 @@ docker compose up -d --build
 open http://localhost:8080        # create the admin account on first visit
 ```
 
+Released images are published to GitHub Container Registry: `ghcr.io/101t/odoo-backup:<version>` (e.g. `0.0.1`),
+`latest` for the newest release and `edge` for the current `main`. To run one instead of building locally, replace
+`build: .` and `image: odoo-backup:latest` in the compose file with `image: ghcr.io/101t/odoo-backup:0.0.1`.
+
 Then, in the UI:
 
 1. **Instances → Add instance**: Odoo URL and master password. Use *Test connection* to check the version, the
@@ -295,6 +299,25 @@ server messages like `server.ts`.
 
 The release build embeds `frontend/dist` into the binary (`rust-embed`), so `make build` produces a single file
 to deploy.
+
+### CI and releases
+
+`.github/workflows/ci.yml` runs on every pull request and push to `main`: rustfmt, clippy, the tests (SQLite and
+PostgreSQL), the TS type-check, then it builds the Docker image and checks that the container starts and reports
+the expected version on `/api/health`. Pushes to `main` publish `ghcr.io/101t/odoo-backup:edge`.
+
+The version lives in the root `Cargo.toml` (the binary, `--version` and `/api/health` report it). To release:
+
+```bash
+# set version = "0.0.2" in Cargo.toml, then:
+cargo check                       # updates Cargo.lock
+git commit -am "chore: release 0.0.2"
+git tag v0.0.2
+git push origin main v0.0.2
+```
+
+The tag publishes `ghcr.io/101t/odoo-backup:0.0.2`, `:0.0` and `:latest`. The run fails if the tag does not match
+the version in `Cargo.toml`.
 
 ### API overview
 
