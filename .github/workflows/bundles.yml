@@ -127,6 +127,8 @@ jobs:
     name: Install on ${{ matrix.image }} (${{ matrix.arch }})
     needs: linux
     runs-on: ${{ matrix.runner }}
+    # Distribution mirrors are sometimes slow (openSUSE took 20 min once); never let one stall a release for hours.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
