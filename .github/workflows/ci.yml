@@ -19,6 +19,24 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/odoo-backup
 
 jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      # The binary reports CARGO_PKG_VERSION (--version, /api/health), so a release tag must match Cargo.toml.
+      - name: Read version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+
   backend:
     name: Backend (fmt, clippy, tests)
     runs-on: ubuntu-24.04
@@ -65,24 +83,13 @@ jobs:
 
   image:
     name: Docker image
-    needs: [backend, frontend]
+    needs: [version, backend, frontend]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
-
-      # The binary reports CARGO_PKG_VERSION (--version, /api/health), so a release tag must match Cargo.toml.
-      - name: Read version
-        id: version
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
-            exit 1
-          fi
 
       # Tag v0.0.1 -> 0.0.1, 0.0 and latest (plus the major once it is 1 or higher); main -> edge; any push -> sha-<commit>.
       - name: Image tags
@@ -113,7 +120,7 @@ jobs:
 
       - name: Smoke test
         env:
-          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_VERSION: ${{ needs.version.outputs.version }}
         run: |
           docker run -d --name odoo-backup -p 8080:8080 odoo-backup:ci
           body=""
@@ -146,3 +153,42 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+  bundles:
+    name: Server bundles
+    needs: [version, backend, frontend]
+    uses: ./.github/workflows/bundles.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  # Tags only: publishes the bundles, install.sh and SHA256SUMS as a GitHub release, with build provenance
+  # (verify a download with: gh attestation verify <file> --repo <owner>/<repo>).
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [image, bundles]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp packaging/linux/install.sh dist/
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "Odoo Backup ${GITHUB_REF_NAME#v}" --generate-notes

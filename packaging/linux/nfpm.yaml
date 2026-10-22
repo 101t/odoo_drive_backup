@@ -1,0 +1,44 @@
+# Native Linux packages (deb, rpm, archlinux), built by .github/workflows/bundles.yml. From the repository root,
+# with the static binary copied to target/package/odoo-backup:
+#   ARCH=amd64 VERSION=0.0.1 nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/
+name: odoo-backup
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: 1
+section: admin
+priority: optional
+maintainer: 101t <101t@users.noreply.github.com>
+description: |
+  Automated, verified backups of Odoo instances to Google Drive and local/NAS storage,
+  with a web dashboard. Runs as the odoo-backup systemd service on port 8080.
+homepage: https://github.com/101t/odoo_drive_backup
+license: MIT
+depends:
+  - ca-certificates
+
+contents:
+  - src: target/package/odoo-backup
+    dst: /usr/bin/odoo-backup
+    file_info:
+      mode: 0755
+  - src: packaging/linux/odoo-backup.service
+    dst: /usr/lib/systemd/system/odoo-backup.service
+    file_info:
+      mode: 0644
+  - src: packaging/odoo-backup.env
+    dst: /etc/odoo-backup/odoo-backup.env
+    type: config|noreplace
+    file_info:
+      mode: 0640
+
+scripts:
+  preinstall: packaging/linux/scripts/preinstall.sh
+  postinstall: packaging/linux/scripts/postinstall.sh
+  preremove: packaging/linux/scripts/preremove.sh
+  postremove: packaging/linux/scripts/postremove.sh
+
+archlinux:
+  scripts:
+    preupgrade: packaging/linux/scripts/preinstall.sh
+    postupgrade: packaging/linux/scripts/postinstall.sh

@@ -1,0 +1,47 @@
+[Unit]
+Description=Odoo Backup (automated backups of Odoo instances)
+Documentation=https://github.com/101t/odoo_drive_backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=odoo-backup
+Group=odoo-backup
+# Defaults; /etc/odoo-backup/odoo-backup.env overrides them.
+Environment=ODB_DATA_DIR=/var/lib/odoo-backup RUST_LOG=info
+EnvironmentFile=-/etc/odoo-backup/odoo-backup.env
+ExecStart=/usr/bin/odoo-backup serve
+Restart=on-failure
+RestartSec=5s
+# Running backups get up to 20 s to record their state before the process exits.
+TimeoutStopSec=45s
+StateDirectory=odoo-backup
+StateDirectoryMode=0750
+UMask=0027
+LimitNOFILE=65536
+
+# Hardening. The service can write to its data directory and to folders outside /usr, /etc, /boot and /home
+# that the odoo-backup user owns (e.g. /var/backups/odoo-backup or a NAS mount for "Local folder" destinations).
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

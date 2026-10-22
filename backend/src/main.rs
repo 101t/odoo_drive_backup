@@ -14,9 +14,11 @@ mod state;
 mod storage;
 mod util;
 mod web;
+#[cfg(windows)]
+mod winservice;
 
 use std::collections::HashMap;
-use std::io::BufRead;
+use std::io::{BufRead, IsTerminal};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,6 +36,10 @@ use crate::events::EventBus;
 use crate::notify::Notifier;
 use crate::state::AppState;
 use crate::storage::StorageContext;
+
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Parser)]
 #[command(name = "odoo-backup", version, about = "Automated backup manager for Odoo instances")]
@@ -59,17 +65,22 @@ enum Command {
 }
 
 fn main() -> anyhow::Result<()> {
+    // The Windows service manager starts `odoo-backup.exe windows-service <env file>` (see packaging/windows/install.ps1).
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "windows-service") {
+        return winservice::run(std::env::args_os().nth(2).map(std::path::PathBuf::from));
+    }
+
     let cli = Cli::parse();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=info,hyper=warn,reqwest=warn")),
-        )
+        .with_env_filter(log_filter())
+        // Plain text for journald and other log collectors.
+        .with_ansi(std::io::stdout().is_terminal())
         .init();
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => runtime.block_on(serve(cli.config)),
+        Command::Serve => runtime.block_on(serve(cli.config, shutdown_signal())),
         Command::ResetPassword { username } => runtime.block_on(reset_password(cli.config, username)),
         Command::GenerateKey => {
             use base64::Engine as _;
@@ -78,6 +89,11 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Healthcheck => runtime.block_on(healthcheck(cli.config)),
     }
+}
+
+fn log_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=info,hyper=warn,reqwest=warn"))
 }
 
 async fn healthcheck(config: Config) -> anyhow::Result<()> {
@@ -116,7 +132,8 @@ async fn open_database(config: &Config) -> anyhow::Result<(Db, Arc<Crypto>)> {
     Ok((pool, crypto))
 }
 
-async fn serve(config: Config) -> anyhow::Result<()> {
+/// Runs the server until `stop` resolves, then lets running backups wind down.
+async fn serve(config: Config, stop: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let config = Arc::new(config);
     let (pool, crypto) = open_database(&config).await?;
     let _claim = pool.claim().await?;
@@ -165,7 +182,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let shutdown = state.shutdown.clone();
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            shutdown_signal().await;
+            stop.await;
             tracing::info!("shutting down");
             shutdown.cancel();
         })

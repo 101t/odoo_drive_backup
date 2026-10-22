@@ -98,10 +98,24 @@ pub fn slugify(input: &str) -> String {
 }
 
 /// Free bytes available to unprivileged users on the filesystem holding `path`.
+#[cfg(unix)]
 pub fn available_space(path: &Path) -> Option<u64> {
     let stat = nix::sys::statvfs::statvfs(path).ok()?;
     #[allow(clippy::unnecessary_cast)]
     Some(stat.blocks_available() as u64 * stat.fragment_size() as u64)
+}
+
+/// Free bytes available to the current user (quotas included) on the volume holding `path`.
+#[cfg(windows)]
+pub fn available_space(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; null pointers mark the totals we do not need.
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+    (ok != 0).then_some(free)
 }
 
 /// Exponential backoff with jitter: base * 2^attempt, capped.

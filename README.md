@@ -78,7 +78,68 @@ Then, in the UI:
 > master passwords and Google credentials. Alternatively pass your own key with `ODB_SECRET_KEY`
 > (`docker compose run --rm odoo-backup generate-key`).
 
-### Without Docker
+## Install on a server (without Docker)
+
+Each [release](https://github.com/101t/odoo_drive_backup/releases) ships native bundles that install Odoo Backup
+as a system service. The Linux binary is static, so it does not depend on the distribution's libraries.
+
+### Linux
+
+One command picks the right package for the distribution: `.deb` (Debian, Ubuntu), `.rpm` (RHEL, Rocky,
+AlmaLinux, CentOS Stream, Fedora, openSUSE) or `.pkg.tar.zst` (Arch). It checks the package against the release's
+`SHA256SUMS` and installs it with apt, dnf/yum/zypper or pacman:
+
+```bash
+curl -fsSL https://github.com/101t/odoo_drive_backup/releases/latest/download/install.sh | sudo sh
+```
+
+Then open `http://<server>:8080` and create the admin account.
+
+| What | Where |
+|------|-------|
+| Service | `systemctl status odoo-backup`, runs as the unprivileged `odoo-backup` user with systemd hardening |
+| Settings | `/etc/odoo-backup/odoo-backup.env` (then `sudo systemctl restart odoo-backup`) |
+| Data, `secret.key` | `/var/lib/odoo-backup` (back it up) |
+| Local backups | `/var/backups/odoo-backup`: use this path for a *Local folder* destination |
+| Logs | `journalctl -u odoo-backup` |
+
+- **Upgrade:** run the same command again. Your settings and data are kept.
+- **Specific version:** `curl -fsSL .../install.sh | sudo sh -s -- --version 0.0.2`
+- **Offline servers:** copy the package, `SHA256SUMS` and `install.sh` to the server, then run
+  `sudo sh install.sh --from <that folder>`.
+- **Uninstall:** `sudo sh install.sh --uninstall`. The data and settings are kept.
+- **Install the package directly:** `sudo apt install ./odoo-backup_<version>-1_amd64.deb`,
+  `sudo dnf install ./odoo-backup-<version>-1.x86_64.rpm` or `sudo pacman -U odoo-backup-<version>-1-x86_64.pkg.tar.zst`.
+- **Other distributions** (Alpine, Gentoo, NixOS…): `odoo-backup-<version>-<arch>-linux.tar.gz` holds the static
+  binary, the systemd unit and the settings template.
+
+The service may write only to its data directory and to folders it owns outside `/usr`, `/etc`, `/boot` and
+`/home`. Before using a NAS mount or another folder as a destination, give it to the service user:
+`sudo chown odoo-backup: /mnt/nas/odoo`.
+
+To check that a download was built by this repository's CI: `gh attestation verify <file> --repo 101t/odoo_drive_backup`.
+
+### Windows Server
+
+Download `odoo-backup-<version>-x86_64-windows.zip`, extract it, and in PowerShell opened as Administrator run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -OpenFirewall
+```
+
+This installs the `OdooBackup` service, which starts automatically and restarts after a crash. It runs as the
+virtual account `NT SERVICE\OdooBackup`, not as LocalSystem.
+
+- **Program:** `C:\Program Files\OdooBackup`.
+- **Settings, data and logs:** `C:\ProgramData\OdooBackup`. Only Administrators, SYSTEM and the service can open
+  this folder.
+- **Settings file:** `odoo-backup.env` in that folder; run `Restart-Service OdooBackup` after a change.
+- **Upgrade:** run `install.ps1` from a newer zip.
+- **Uninstall:** `install.ps1 -Uninstall`. The data is kept.
+- **Local folder destinations:** grant the service access first, for example
+  `icacls D:\OdooBackups /grant "NT SERVICE\OdooBackup:(OI)(CI)M"`.
+
+### From source
 
 ```bash
 make build                      # needs Node 22+ and Rust 1.88+
@@ -306,6 +367,16 @@ to deploy.
 PostgreSQL), the TS type-check, then it builds the Docker image and checks that the container starts and reports
 the expected version on `/api/health`. Pushes to `main` publish `ghcr.io/101t/odoo-backup:edge`.
 
+The same run calls `.github/workflows/bundles.yml`, which builds the server bundles from `packaging/` and installs
+each one before it can be released:
+
+- **Linux:** static musl binaries for x86_64 and aarch64, packaged with nfpm (`packaging/linux/nfpm.yaml`). They
+  are installed with `install.sh` on the systemd runner and on Ubuntu, Debian, AlmaLinux, Fedora, openSUSE and Arch
+  containers (`packaging/linux/test-install.sh`).
+- **Windows:** the service bundle is installed, restarted and removed on Windows Server 2025.
+
+Download the artifacts from the run's summary page to try a build before it is released.
+
 The version lives in the root `Cargo.toml` (the binary, `--version` and `/api/health` report it). To release:
 
 ```bash
@@ -316,8 +387,9 @@ git tag v0.0.2
 git push origin main v0.0.2
 ```
 
-The tag publishes `ghcr.io/101t/odoo-backup:0.0.2`, `:0.0` and `:latest`. The run fails if the tag does not match
-the version in `Cargo.toml`.
+The tag publishes `ghcr.io/101t/odoo-backup:0.0.2`, `:0.0` and `:latest`. It also creates the GitHub release with
+the server bundles, `install.sh`, `SHA256SUMS` and build provenance attestations. The run fails if the tag does not
+match the version in `Cargo.toml`.
 
 ### API overview
 

@@ -1,0 +1,211 @@
+name: Server bundles
+
+# Builds the native server bundles and tests each one by installing it:
+# - Linux (x86_64, aarch64): a static musl binary (runs on any distribution) as .tar.gz, .deb, .rpm and Arch packages.
+# - Windows (x86_64): a zip with odoo-backup.exe and the service installer.
+# Called by ci.yml, whose release job publishes the bundle-* artifacts for v* tags.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version from Cargo.toml
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  VERSION: ${{ inputs.version }}
+  NFPM_VERSION: "2.47.0"
+
+jobs:
+  ui:
+    name: Web UI
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ui-dist
+          path: frontend/dist
+          retention-days: 1
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: ui
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-musl, package_arch: amd64 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, package_arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ui-dist
+          path: frontend/dist
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99" # keep in step with ci.yml and the Dockerfile
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked -p odoo-backup --target ${{ matrix.target }}
+
+      - name: Check the binary
+        run: |
+          bin=target/${{ matrix.target }}/release/odoo-backup
+          file "$bin"
+          file "$bin" | grep -q 'static' || { echo "::error::$bin is not statically linked"; exit 1; }
+          [[ "$("$bin" --version)" == "odoo-backup $VERSION" ]]
+          mkdir -p target/package
+          cp "$bin" target/package/odoo-backup
+
+      - name: Install nfpm
+        run: |
+          archive="nfpm_${NFPM_VERSION}_Linux_$(uname -m | sed 's/aarch64/arm64/').tar.gz"
+          base="https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION"
+          curl -fsSLO "$base/$archive"
+          curl -fsSLO "$base/checksums.txt"
+          grep " $archive\$" checksums.txt | sha256sum -c -
+          sudo tar -xzf "$archive" -C /usr/local/bin nfpm
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          for format in deb rpm archlinux; do
+            ARCH=${{ matrix.package_arch }} nfpm package -f packaging/linux/nfpm.yaml -p "$format" -t dist/
+          done
+          name="odoo-backup-$VERSION-${{ matrix.arch }}-linux"
+          mkdir "$name"
+          cp target/package/odoo-backup packaging/linux/odoo-backup.service packaging/odoo-backup.env README.md "$name/"
+          tar -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          ls -l dist
+
+      # This runner boots with systemd, so the unit, its hardening and the package scripts run for real.
+      - name: Install as a systemd service and remove again
+        run: |
+          healthy() {
+            for _ in $(seq 1 30); do odoo-backup healthcheck 2>/dev/null && return 0; sleep 1; done
+            sudo journalctl -u odoo-backup --no-pager
+            return 1
+          }
+          sudo sh packaging/linux/install.sh --from dist
+          systemctl is-active odoo-backup
+          healthy
+          sudo sh packaging/linux/install.sh --from dist # running it again is harmless
+          healthy
+          sudo sh packaging/linux/install.sh --uninstall
+          if systemctl is-active --quiet odoo-backup; then echo "::error::the service still runs"; exit 1; fi
+          sudo test -f /var/lib/odoo-backup/secret.key
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-linux-${{ matrix.arch }}
+          # The release job writes one SHA256SUMS for all the bundles.
+          path: |
+            dist/
+            !dist/SHA256SUMS
+
+  distros:
+    name: Install on ${{ matrix.image }} (${{ matrix.arch }})
+    needs: linux
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - debian:12
+          - debian:13
+          - almalinux:8
+          - almalinux:9
+          - almalinux:10
+          - fedora:latest
+          - opensuse/leap:15.6
+          - archlinux:latest
+        arch: [x86_64]
+        runner: [ubuntu-24.04]
+        include:
+          - { image: ubuntu:24.04, arch: aarch64, runner: ubuntu-24.04-arm }
+          - { image: almalinux:9, arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundle-linux-${{ matrix.arch }}
+          path: dist
+      - run: cd dist && sha256sum -- * > SHA256SUMS
+      - run: docker run --rm -v "$PWD:/src:ro" -w /src "${{ matrix.image }}" sh packaging/linux/test-install.sh dist
+
+  windows:
+    name: Windows x86_64
+    needs: ui
+    runs-on: windows-2025
+    env:
+      # aws-lc (TLS) uses its pre-assembled objects instead of requiring NASM.
+      AWS_LC_SYS_PREBUILT_NASM: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ui-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p odoo-backup
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = & target/release/odoo-backup.exe --version
+          if ($version -ne "odoo-backup $env:VERSION") { throw "The binary reports '$version'" }
+          $name = "odoo-backup-$env:VERSION-x86_64-windows"
+          New-Item -ItemType Directory -Force -Path $name, dist | Out-Null
+          Copy-Item target/release/odoo-backup.exe, packaging/windows/install.ps1, packaging/odoo-backup.env, README.md $name
+          Compress-Archive -Path $name -DestinationPath "dist/$name.zip"
+
+      - name: Install as a Windows service and remove again
+        shell: pwsh
+        run: |
+          $installer = "./odoo-backup-$env:VERSION-x86_64-windows/install.ps1"
+          & $installer -OpenFirewall
+          if ((Get-Service OdooBackup).Status -ne 'Running') { throw 'The service is not running' }
+          # Stop goes through the service control handler and the graceful shutdown.
+          Restart-Service OdooBackup
+          & $installer # reinstall: the upgrade path
+          & $installer -Uninstall
+          if (Get-Service OdooBackup -ErrorAction SilentlyContinue) { throw 'The service still exists' }
+          if (-not (Test-Path "$env:ProgramData\OdooBackup\secret.key")) { throw 'The data was not kept' }
+          # Only Administrators, SYSTEM and the service may read the data directory.
+          $readers = (Get-Acl "$env:ProgramData\OdooBackup").Access.IdentityReference.Value
+          if ($readers -match 'Users') { throw "The data directory is readable by: $readers" }
+
+      - name: Service logs
+        if: failure()
+        shell: pwsh
+        run: Get-ChildItem "$env:ProgramData\OdooBackup\logs" -ErrorAction SilentlyContinue | Get-Content -Tail 50
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-windows-x86_64
+          path: dist/
