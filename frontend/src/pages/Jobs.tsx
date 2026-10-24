@@ -1,9 +1,9 @@
-import { CalendarClock, Pencil, Play, Plus, Trash } from "lucide-react";
+import { CalendarClock, Pencil, Play, Plus, ShieldAlert, ShieldCheck, Trash } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { errorMessage } from "../api/client";
 import { useDeleteJob, useDestinations, useJobs, useRunJob, useSaveJob } from "../api/hooks";
-import type { Job } from "../api/types";
+import type { Job, PolicyScore } from "../api/types";
 import { useConfirm } from "../components/confirm";
 import { DestinationIcon, StatusBadge } from "../components/RunBits";
 import { useToast } from "../components/toast";
@@ -12,6 +12,22 @@ import { useT } from "../i18n";
 import { formatDateTime, timeAgo } from "../lib/format";
 import { useNow } from "../lib/live";
 import { JobForm, jobToInput, retentionSummary } from "./JobForm";
+
+/** 3-2-1-1-0 badge; the tooltip lists what is missing and how to fix it. */
+function PolicyBadge({ policy }: { policy: PolicyScore }) {
+  const t = useT();
+  const missing = policy.rules.filter((r) => !r.ok);
+  const tone = policy.score === policy.max ? "green" : policy.score >= 3 ? "amber" : "red";
+  const tip = [t("jobs.policy_title"), ...missing.map((r) => `• ${t(`policy.${r.id}`)}`)].join("\n");
+  return (
+    <span title={tip} className="cursor-help">
+      <Badge tone={tone}>
+        {missing.length === 0 ? <ShieldCheck /> : <ShieldAlert />}
+        {t("jobs.policy", { score: policy.score, max: policy.max })}
+      </Badge>
+    </span>
+  );
+}
 
 export function JobsPage() {
   const t = useT();
@@ -151,6 +167,7 @@ export function JobsPage() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-zinc-500">
                     <StatusBadge status={job.last_status} />
+                    <PolicyBadge policy={job.policy} />
                     {job.last_run_at && <span>{timeAgo(job.last_run_at, now)}</span>}
                   </div>
                 </div>

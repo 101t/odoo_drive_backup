@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::db::{self, NotificationChannelRow};
 use crate::error::{ApiResult, AppError};
-use crate::notify::{ChannelSecret, EmailConfig, TelegramConfig, WebhookConfig};
+use crate::notify::{ChannelSecret, EmailConfig, HeartbeatConfig, TelegramConfig, WebhookConfig};
 use crate::state::AppState;
 use crate::util::now;
 
@@ -123,6 +123,14 @@ fn prepare(
                 serde_json::to_value(config),
                 ChannelSecret { password: keep(new.password, old.password), ..Default::default() },
             )
+        }
+        "heartbeat" => {
+            let config: HeartbeatConfig = serde_json::from_value(input.config.clone()).map_err(bad)?;
+            let url = keep(new.url, old.url).ok_or_else(|| AppError::bad_request("The ping URL is required"))?;
+            if !(url.starts_with("https://") || url.starts_with("http://")) || url::Url::parse(&url).is_err() {
+                return Err(AppError::bad_request("The ping URL must start with https://"));
+            }
+            (serde_json::to_value(config), ChannelSecret { url: Some(url), ..Default::default() })
         }
         other => return Err(AppError::bad_request(format!("Unknown channel type '{other}'"))),
     };

@@ -1,4 +1,5 @@
-//! Run notifications: webhooks (generic JSON, Slack-compatible, Discord), Telegram and e-mail.
+//! Run notifications: webhooks (generic JSON, Slack-compatible, Discord), Telegram, e-mail and
+//! heartbeat pings to a dead-man's switch monitor (healthchecks.io, Uptime Kuma, ...).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,7 +55,23 @@ pub struct EmailConfig {
     pub to: Vec<String>,
 }
 
-/// Secret part of a channel: webhook URL, Telegram bot token or SMTP password.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HeartbeatStyle {
+    /// healthchecks.io and compatibles: `GET <url>` on success, `GET <url>/fail` on failure.
+    Healthchecks,
+    /// Uptime Kuma push monitor: `GET <url>?status=up|down&msg=...`.
+    UptimeKuma,
+    /// `GET <url>` on success only: the monitor alerts when pings stop.
+    Plain,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatConfig {
+    pub style: HeartbeatStyle,
+}
+
+/// Secret part of a channel: webhook or ping URL, Telegram bot token or SMTP password.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChannelSecret {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,13 +112,15 @@ impl Notifier {
         if run.status == status::CANCELLED {
             return Vec::new();
         }
+        // A backup that succeeded with a sanity warning still needs someone to look at it.
         let success = run.status == status::SUCCESS;
+        let problem = !success || run.warning.is_some();
         let channels: Vec<NotificationChannelRow> = match db::query_as(
             "SELECT * FROM notification_channels WHERE enabled = TRUE AND \
              ((? AND on_success = TRUE) OR (? AND on_failure = TRUE)) ORDER BY id",
         )
         .bind(success)
-        .bind(!success)
+        .bind(problem)
         .fetch_all(&self.db)
         .await
         {
@@ -138,6 +157,7 @@ impl Notifier {
     fn run_message(&self, run: &Run, artifacts: &[Artifact]) -> Message {
         let restore = run.kind == "restore";
         let (icon, verdict) = match run.status.as_str() {
+            status::SUCCESS if run.warning.is_some() => ("⚠️", "succeeded with a warning"),
             status::SUCCESS => ("✅", "succeeded"),
             status::PARTIAL => ("⚠️", "partially failed"),
             _ => ("❌", "FAILED"),
@@ -175,6 +195,9 @@ impl Notifier {
         }
         if let Some(error) = &run.error {
             lines.push(format!("Error: {error}"));
+        }
+        if let Some(warning) = &run.warning {
+            lines.push(format!("Warning: {warning}"));
         }
         let link = self.public_url.as_ref().map(|base| format!("{base}/runs/{}", run.id));
         if let Some(link) = &link {
@@ -233,8 +256,31 @@ impl Notifier {
                 let config: EmailConfig = serde_json::from_str(&channel.config_json)?;
                 send_email(&config, secret.password.as_deref(), message).await
             }
+            "heartbeat" => {
+                let config: HeartbeatConfig = serde_json::from_str(&channel.config_json)?;
+                let url = secret.url.ok_or_else(|| anyhow!("ping URL missing"))?;
+                let up = message.event == "test" || message.event.ends_with(".success");
+                match heartbeat_url(&url, config.style, up, &message.subject)? {
+                    Some(ping) => self.get(&ping).await,
+                    None => Ok(()),
+                }
+            }
             other => bail!("unknown channel type '{other}'"),
         }
+    }
+
+    async fn get(&self, url: &url::Url) -> anyhow::Result<()> {
+        let resp = self
+            .http
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|e| anyhow!("request failed: {}", error_chain(&e.without_url())))?;
+        let status = resp.status();
+        if !status.is_success() {
+            bail!("HTTP {status}");
+        }
+        Ok(())
     }
 
     async fn post_json(&self, url: &str, payload: &Value) -> anyhow::Result<()> {
@@ -279,11 +325,59 @@ async fn send_email(config: &EmailConfig, password: Option<&str>, message: &Mess
     Ok(())
 }
 
+/// The URL to ping for an outcome, or `None` when this style stays silent.
+fn heartbeat_url(base: &str, style: HeartbeatStyle, up: bool, summary: &str) -> anyhow::Result<Option<url::Url>> {
+    let mut url = url::Url::parse(base.trim()).context("invalid ping URL")?;
+    match style {
+        HeartbeatStyle::Plain if !up => return Ok(None),
+        HeartbeatStyle::Plain => {}
+        HeartbeatStyle::Healthchecks if !up => {
+            let path = format!("{}/fail", url.path().trim_end_matches('/'));
+            url.set_path(&path);
+        }
+        HeartbeatStyle::Healthchecks => {}
+        HeartbeatStyle::UptimeKuma => {
+            // Replace the defaults Uptime Kuma puts in the push URL it displays.
+            let kept: Vec<(String, String)> = url
+                .query_pairs()
+                .filter(|(k, _)| k != "status" && k != "msg")
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+            url.query_pairs_mut()
+                .clear()
+                .extend_pairs(kept)
+                .append_pair("status", if up { "up" } else { "down" })
+                .append_pair("msg", &truncate(summary, 200));
+        }
+    }
+    Ok(Some(url))
+}
+
 fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_string()
     } else {
         let cut: String = text.chars().take(max).collect();
         format!("{cut}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_urls() {
+        let ping = |base, style, up| heartbeat_url(base, style, up, "Backup OK").unwrap().map(|u| u.to_string());
+        let hc = "https://hc-ping.com/5f0e0b3c";
+        assert_eq!(ping(hc, HeartbeatStyle::Healthchecks, true).as_deref(), Some(hc));
+        assert_eq!(ping(hc, HeartbeatStyle::Healthchecks, false).as_deref(), Some("https://hc-ping.com/5f0e0b3c/fail"));
+        assert_eq!(ping(hc, HeartbeatStyle::Plain, false), None);
+        let kuma = "https://kuma.example.com/api/push/AbC?status=up&msg=OK&ping=";
+        assert_eq!(
+            ping(kuma, HeartbeatStyle::UptimeKuma, false).as_deref(),
+            Some("https://kuma.example.com/api/push/AbC?ping=&status=down&msg=Backup+OK")
+        );
+        assert!(heartbeat_url("not a url", HeartbeatStyle::Plain, true, "").is_err());
     }
 }

@@ -165,8 +165,12 @@ pub async fn remove(
         return Err(AppError::Conflict("Cancel the run before deleting it".into()));
     }
     if truthy(q.delete_files.as_deref()) {
+        let artifacts = run_artifacts(&state.db, id).await?;
+        if artifacts.iter().any(|a| a.pinned && a.status == status::ARTIFACT_STORED) {
+            return Err(AppError::Conflict("This backup is pinned: unpin it before deleting its files".into()));
+        }
         let mut errors = Vec::new();
-        for artifact in run_artifacts(&state.db, id).await? {
+        for artifact in artifacts {
             if artifact.status == status::ARTIFACT_STORED
                 && let Err(err) = delete_stored(&state, &artifact, "manual").await
             {
@@ -206,7 +210,30 @@ pub async fn delete_artifact(State(state): State<AppState>, Path(id): Path<i64>)
     if artifact.status != status::ARTIFACT_STORED {
         return Err(AppError::Conflict("This file is not stored".into()));
     }
+    if artifact.pinned {
+        return Err(AppError::Conflict("This backup is pinned: unpin it before deleting its files".into()));
+    }
     delete_stored(&state, &artifact, "manual").await?;
+    Ok(Json(get_artifact(&state.db, id).await?))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PinInput {
+    pinned: bool,
+}
+
+/// Pins (legal hold) or unpins a stored copy: pinned copies are never pruned by retention.
+pub async fn pin_artifact(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<PinInput>,
+) -> ApiResult<Json<Artifact>> {
+    let artifact = get_artifact(&state.db, id).await?;
+    if input.pinned && artifact.status != status::ARTIFACT_STORED {
+        return Err(AppError::Conflict("This file is not stored".into()));
+    }
+    db::query("UPDATE artifacts SET pinned = ? WHERE id = ?").bind(input.pinned).bind(id).execute(&state.db).await?;
+    state.engine.publish_run(artifact.run_id).await;
     Ok(Json(get_artifact(&state.db, id).await?))
 }
 

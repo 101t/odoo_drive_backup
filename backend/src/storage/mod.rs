@@ -53,13 +53,79 @@ impl StorageContext {
     }
 }
 
+/// Digests of a local file, computed in one pass. Each destination verifies the one it supports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Hashes {
+    pub md5: String,
+    pub sha256: String,
+}
+
+impl Hashes {
+    /// Compares with recorded digests (hex, any case), preferring SHA-256. Returns the
+    /// mismatching algorithm and the expected value, or `None` when everything known matches.
+    pub fn mismatch(&self, sha256: Option<&str>, md5: Option<&str>) -> Option<(&'static str, String)> {
+        if let Some(expected) = sha256.filter(|s| !s.is_empty()) {
+            return (!expected.eq_ignore_ascii_case(&self.sha256)).then(|| ("SHA-256", expected.to_string()));
+        }
+        md5.filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case(&self.md5)).map(|m| ("MD5", m.to_string()))
+    }
+}
+
+/// Digest a destination computes on its side and can be checked against [`Hashes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HashKind {
+    Md5,
+    Sha256,
+}
+
+/// Physical kind of storage, used to count "media types" in the 3-2-1 rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Medium {
+    Disk,
+    Cloud,
+}
+
+/// What a destination can do, so callers adapt without matching on its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Capabilities {
+    pub hash: HashKind,
+    pub medium: Medium,
+    /// Stored away from the Odoo server (a cloud, or a directory mounted from another site).
+    pub off_site: bool,
+    /// Objects cannot be altered or deleted before their retention date (object lock, WORM).
+    pub immutable: bool,
+    pub can_delete: bool,
+}
+
+/// Capabilities from a destination's kind and public configuration (no secret needed).
+pub fn capabilities(kind: &str, config_json: &str) -> Capabilities {
+    match kind {
+        "gdrive" => Capabilities {
+            hash: HashKind::Md5,
+            medium: Medium::Cloud,
+            off_site: true,
+            immutable: false,
+            can_delete: true,
+        },
+        _ => Capabilities {
+            hash: HashKind::Sha256,
+            medium: Medium::Disk,
+            off_site: serde_json::from_str::<LocalConfig>(config_json).is_ok_and(|c| c.off_site),
+            immutable: false,
+            can_delete: true,
+        },
+    }
+}
+
 pub struct UploadRequest<'a> {
     pub file: &'a Path,
     pub size: u64,
     pub file_name: &'a str,
     /// Sub-folders below the destination root, e.g. `[instance, database]`.
     pub folder: &'a [String],
-    pub md5: &'a str,
+    pub hashes: &'a Hashes,
     pub mime: &'a str,
 }
 
@@ -164,19 +230,21 @@ impl Storage {
         }
     }
 
-    /// Downloads a stored object to `dest`, returning its MD5 (hex) and size.
+    /// Downloads a stored object to `dest`, returning its digests and size.
     pub async fn download(
         &self,
         remote_id: &str,
         dest: &Path,
         progress: ProgressFn,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<(String, u64)> {
+    ) -> anyhow::Result<(Hashes, u64)> {
         use md5::{Digest, Md5};
+        use sha2::Sha256;
         let (mut stream, _) = self.open_stream(remote_id).await?;
         let file = tokio::fs::File::create(dest).await?;
         let mut writer = BufWriter::with_capacity(1 << 20, file);
-        let mut hasher = Md5::new();
+        let mut md5 = Md5::new();
+        let mut sha256 = Sha256::new();
         let mut size = 0u64;
         loop {
             let next = tokio::select! {
@@ -185,14 +253,16 @@ impl Storage {
             };
             let Some(chunk) = next else { break };
             let chunk = chunk.map_err(|e| anyhow!("download interrupted: {e}"))?;
-            hasher.update(&chunk);
+            md5.update(&chunk);
+            sha256.update(&chunk);
             writer.write_all(&chunk).await?;
             size += chunk.len() as u64;
             progress(size);
         }
         writer.flush().await?;
         writer.into_inner().sync_all().await?;
-        Ok((hex::encode(hasher.finalize()), size))
+        let hashes = Hashes { md5: hex::encode(md5.finalize()), sha256: hex::encode(sha256.finalize()) };
+        Ok((hashes, size))
     }
 
     pub async fn test(&self) -> TestReport {
@@ -200,5 +270,29 @@ impl Storage {
             Storage::Gdrive(s) => s.test().await,
             Storage::Local(s) => s.test().await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hashes_prefer_sha256() {
+        let hashes = Hashes { md5: "aa".into(), sha256: "bb".into() };
+        assert_eq!(hashes.mismatch(Some("BB"), Some("zz")), None, "SHA-256 wins over a stale MD5");
+        assert_eq!(hashes.mismatch(Some("cc"), Some("aa")), Some(("SHA-256", "cc".into())));
+        assert_eq!(hashes.mismatch(None, Some("AA")), None);
+        assert_eq!(hashes.mismatch(Some(""), Some("ab")), Some(("MD5", "ab".into())));
+        assert_eq!(hashes.mismatch(None, None), None);
+    }
+
+    #[test]
+    fn capabilities_follow_configuration() {
+        let drive = capabilities("gdrive", "{}");
+        assert!(drive.off_site && drive.medium == Medium::Cloud && drive.hash == HashKind::Md5);
+        let local = capabilities("local", r#"{"path": "/backups"}"#);
+        assert!(!local.off_site && local.medium == Medium::Disk);
+        assert!(capabilities("local", r#"{"path": "/mnt/nas", "off_site": true}"#).off_site);
     }
 }

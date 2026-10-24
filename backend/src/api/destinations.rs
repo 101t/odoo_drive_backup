@@ -13,7 +13,9 @@ use crate::db::{self, DestinationRow, get_destination};
 use crate::error::{ApiResult, AppError};
 use crate::state::{AppState, PendingOAuth};
 use crate::storage::gdrive::{self, ServiceAccountKey, extract_folder_id};
-use crate::storage::{GdriveAuthKind, GdriveConfig, GdriveSecret, LocalConfig, Storage, TestReport};
+use crate::storage::{
+    Capabilities, GdriveAuthKind, GdriveConfig, GdriveSecret, LocalConfig, Storage, TestReport, capabilities,
+};
 use crate::util::now;
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +37,7 @@ pub struct DestinationView {
     has_service_account_key: bool,
     has_client_secret: bool,
     connected: bool,
+    capabilities: Capabilities,
     stored_files: i64,
     stored_bytes: i64,
     job_count: i64,
@@ -71,6 +74,7 @@ fn view(state: &AppState, row: DestinationListRow) -> DestinationView {
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
     DestinationView {
+        capabilities: capabilities(&d.kind, &d.config_json),
         id: d.id,
         name: d.name,
         kind: d.kind,

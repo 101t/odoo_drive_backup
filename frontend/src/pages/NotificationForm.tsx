@@ -1,4 +1,4 @@
-import { Mail, Send, Webhook } from "lucide-react";
+import { HeartPulse, Mail, Send, Webhook } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { errorMessage } from "../api/client";
 import { useSaveChannel } from "../api/hooks";
@@ -30,6 +30,8 @@ export function NotificationForm({ channel, open, onClose }: { channel: Channel 
   const [password, setPassword] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // heartbeat
+  const [style, setStyle] = useState("healthchecks");
 
   useEffect(() => {
     if (!open) return;
@@ -51,7 +53,14 @@ export function NotificationForm({ channel, open, onClose }: { channel: Channel 
     setPassword("");
     setFrom((c.from as string) ?? "");
     setTo(((c.to as string[]) ?? []).join(", "));
+    setStyle((c.style as string) ?? "healthchecks");
   }, [open, channel?.id]);
+
+  const chooseKind = (next: ChannelKind) => {
+    setKind(next);
+    // A heartbeat is a ping on every successful run: the monitor alerts when pings stop.
+    if (next === "heartbeat") setOnSuccess(true);
+  };
 
   const secretKept = channel?.has_secret ? t("instance_form.password_unchanged") : "";
 
@@ -63,6 +72,8 @@ export function NotificationForm({ channel, open, onClose }: { channel: Channel 
       input = { ...common, config: { format }, secret: { url: url || undefined } };
     } else if (kind === "telegram") {
       input = { ...common, config: { chat_id: chatId }, secret: { bot_token: botToken || undefined } };
+    } else if (kind === "heartbeat") {
+      input = { ...common, config: { style }, secret: { url: url || undefined } };
     } else {
       input = {
         ...common,
@@ -108,7 +119,7 @@ export function NotificationForm({ channel, open, onClose }: { channel: Channel 
         {!channel && (
           <Segmented
             value={kind}
-            onChange={setKind}
+            onChange={chooseKind}
             options={[
               {
                 value: "webhook",
@@ -131,6 +142,14 @@ export function NotificationForm({ channel, open, onClose }: { channel: Channel 
                 label: (
                   <>
                     <Mail /> {t("notification_form.email")}
+                  </>
+                ),
+              },
+              {
+                value: "heartbeat",
+                label: (
+                  <>
+                    <HeartPulse /> {t("notification_form.heartbeat")}
                   </>
                 ),
               },
@@ -162,6 +181,29 @@ export function NotificationForm({ channel, open, onClose }: { channel: Channel 
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder={secretKept || "https://hooks.slack.com/services/…"}
+                required={!channel?.has_secret}
+                dir="ltr"
+              />
+            </Field>
+          </>
+        )}
+
+        {kind === "heartbeat" && (
+          <>
+            <Alert tone="blue">{t("notification_form.heartbeat_hint")}</Alert>
+            <Field label={t("notification_form.heartbeat_style")}>
+              <Select value={style} onChange={(e) => setStyle(e.target.value)}>
+                <option value="healthchecks">{t("notification_form.heartbeat_healthchecks")}</option>
+                <option value="uptime_kuma">{t("notification_form.heartbeat_uptime_kuma")}</option>
+                <option value="plain">{t("notification_form.heartbeat_plain")}</option>
+              </Select>
+            </Field>
+            <Field label={t("notification_form.ping_url")} hint={t("notification_form.stored_encrypted")}>
+              <Input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder={secretKept || "https://hc-ping.com/…"}
                 required={!channel?.has_secret}
                 dir="ltr"
               />

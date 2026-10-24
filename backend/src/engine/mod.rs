@@ -2,6 +2,7 @@
 //! progress reporting, logging, notifications.
 
 pub mod backup;
+pub mod policy;
 pub mod restore;
 pub mod retention;
 pub mod verify;

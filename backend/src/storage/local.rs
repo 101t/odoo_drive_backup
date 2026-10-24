@@ -4,8 +4,8 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
 use futures_util::StreamExt;
-use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +23,9 @@ pub struct LocalConfig {
     pub path: String,
     #[serde(default = "default_true")]
     pub subfolder_per_database: bool,
+    /// The directory is on another site (NFS/SMB mount, removable disk taken away).
+    #[serde(default)]
+    pub off_site: bool,
 }
 
 pub struct LocalStorage {
@@ -68,14 +71,14 @@ impl LocalStorage {
         let partial = dir.join(format!(".{file_name}.partial"));
 
         let result = copy_with_progress(req.file, &partial, progress, cancel).await;
-        let (size, md5) = match result {
+        let (size, sha256) = match result {
             Ok(v) => v,
             Err(err) => {
                 let _ = tokio::fs::remove_file(&partial).await;
                 return Err(err);
             }
         };
-        if size != req.size || !md5.eq_ignore_ascii_case(req.md5) {
+        if size != req.size || !sha256.eq_ignore_ascii_case(&req.hashes.sha256) {
             let _ = tokio::fs::remove_file(&partial).await;
             bail!("verification failed after copying to {}", dir.display());
         }
@@ -151,7 +154,7 @@ async fn copy_with_progress(
     let mut reader = tokio::fs::File::open(source).await?;
     let mut writer = tokio::fs::File::create(dest).await.with_context(|| format!("creating {}", dest.display()))?;
     let mut buf = vec![0u8; 4 << 20];
-    let mut hasher = Md5::new();
+    let mut hasher = Sha256::new();
     let mut copied = 0u64;
     loop {
         if cancel.is_cancelled() {
@@ -182,11 +185,12 @@ mod tests {
         let source = dir.path().join("source.zip");
         let payload = b"PK\x03\x04 test archive";
         tokio::fs::write(&source, payload).await.unwrap();
-        let md5 = hex::encode(Md5::digest(payload));
+        let hashes = super::super::Hashes { md5: String::new(), sha256: hex::encode(Sha256::digest(payload)) };
 
         let storage = LocalStorage::new(&LocalConfig {
             path: dir.path().join("dest").display().to_string(),
             subfolder_per_database: true,
+            off_site: false,
         })
         .unwrap();
         let folder = vec!["Prod / EU".to_string(), "acme".to_string()];
@@ -195,7 +199,7 @@ mod tests {
             size: payload.len() as u64,
             file_name: "acme_2026.zip",
             folder: &folder,
-            md5: &md5,
+            hashes: &hashes,
             mime: "application/zip",
         };
         let stored = storage.upload(&req, no_progress(), &CancellationToken::new()).await.unwrap();
@@ -210,7 +214,8 @@ mod tests {
     #[test]
     fn path_traversal_is_rejected() {
         let storage =
-            LocalStorage::new(&LocalConfig { path: "/backups".into(), subfolder_per_database: true }).unwrap();
+            LocalStorage::new(&LocalConfig { path: "/backups".into(), subfolder_per_database: true, off_site: false })
+                .unwrap();
         assert!(storage.path_of("../etc/passwd").is_err());
         assert!(storage.path_of("/etc/passwd").is_err());
         assert!(storage.path_of("a/b.zip").is_ok());

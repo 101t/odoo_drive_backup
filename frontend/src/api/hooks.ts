@@ -268,6 +268,9 @@ export const useDeleteRun = () =>
 
 export const useDeleteArtifact = () => useRunMutation((id: number) => api.delete(`/api/artifacts/${id}`));
 
+export const usePinArtifact = () =>
+  useRunMutation(({ id, pinned }: { id: number; pinned: boolean }) => api.put(`/api/artifacts/${id}/pin`, { pinned }));
+
 export const useBackupNow = () =>
   useRunMutation((body: { instance_id: number; databases: string[]; destination_ids: number[]; format: string }) =>
     api.post<{ run_ids: number[] }>("/api/backups", body),

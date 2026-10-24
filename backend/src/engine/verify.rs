@@ -5,14 +5,15 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, anyhow, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::odoo::BackupFormat;
 use crate::util::{Cancelled, ProgressFn, format_bytes};
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VerifyReport {
     pub entries: usize,
     pub filestore_files: usize,
@@ -48,6 +49,46 @@ impl VerifyReport {
         }
         format!("Archive verified: {}", parts.join(", "))
     }
+}
+
+/// Sanity checks of a new backup against the previous successful one of the same database.
+/// `drop_percent` is the shrink that raises a warning (0 disables the checks).
+pub fn compare(
+    previous_size: u64,
+    previous: Option<&VerifyReport>,
+    size: u64,
+    current: &VerifyReport,
+    drop_percent: u32,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if drop_percent == 0 {
+        return warnings;
+    }
+    let shrink = |before: u64, after: u64| -> Option<u64> {
+        (before > 0 && after < before).then(|| (before - after) * 100 / before).filter(|p| *p >= drop_percent as u64)
+    };
+    if let Some(pct) = shrink(previous_size, size) {
+        warnings.push(format!(
+            "the backup is {pct}% smaller than the previous one ({} → {})",
+            format_bytes(previous_size),
+            format_bytes(size)
+        ));
+    }
+    // Small filestores fluctuate too much in relative terms to be meaningful.
+    if let Some(prev) = previous.filter(|p| p.filestore_files >= 20 && current.entries > 0)
+        && let Some(pct) = shrink(prev.filestore_files as u64, current.filestore_files as u64)
+    {
+        warnings.push(format!(
+            "the filestore has {pct}% fewer files than in the previous backup ({} → {})",
+            prev.filestore_files, current.filestore_files
+        ));
+    }
+    if let (Some(before), Some(after)) = (previous.and_then(|p| p.modules), current.modules)
+        && after < before
+    {
+        warnings.push(format!("{} fewer installed modules than in the previous backup", before - after));
+    }
+    warnings
 }
 
 /// Blocking: run inside `spawn_blocking`.
@@ -186,6 +227,29 @@ mod tests {
         let data = std::fs::read(&path).unwrap();
         std::fs::write(&path, &data[..data.len() / 2]).unwrap();
         assert!(verify(&path, BackupFormat::Zip, true, &no_progress(), &CancellationToken::new()).is_err());
+    }
+
+    #[test]
+    fn shrinking_backups_are_flagged() {
+        let report = |files: usize, modules: usize| VerifyReport {
+            entries: files + 2,
+            filestore_files: files,
+            modules: Some(modules),
+            ..Default::default()
+        };
+        // Similar backup: nothing to report.
+        assert!(compare(1000, Some(&report(100, 50)), 950, &report(98, 50), 30).is_empty());
+        // Half the size and half the files.
+        let warnings = compare(1000, Some(&report(100, 50)), 500, &report(50, 48), 30);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].starts_with("the backup is 50% smaller"));
+        assert!(warnings[1].starts_with("the filestore has 50% fewer files"));
+        assert_eq!(warnings[2], "2 fewer installed modules than in the previous backup");
+        // Tiny filestores and older runs without a manifest only compare sizes.
+        assert!(compare(1000, Some(&report(4, 50)), 990, &report(1, 50), 30).is_empty());
+        assert_eq!(compare(1000, None, 100, &report(1, 50), 30).len(), 1);
+        // Disabled.
+        assert!(compare(1000, None, 1, &report(0, 0), 0).is_empty());
     }
 
     #[test]

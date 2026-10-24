@@ -190,14 +190,14 @@ async fn upload(storage: &GdriveStorage, data: &[u8]) -> anyhow::Result<crate::s
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("backup.zip");
     std::fs::write(&path, data).unwrap();
-    let md5 = hex::encode(Md5::digest(data));
+    let hashes = crate::storage::Hashes { md5: hex::encode(Md5::digest(data)), sha256: String::new() };
     let folder = vec!["Prod".to_string(), "acme".to_string()];
     let request = UploadRequest {
         file: &path,
         size: data.len() as u64,
         file_name: "backup.zip",
         folder: &folder,
-        md5: &md5,
+        hashes: &hashes,
         mime: "application/zip",
     };
     let progress: crate::util::ProgressFn = Arc::new(|_| {});

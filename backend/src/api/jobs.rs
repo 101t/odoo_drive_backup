@@ -8,11 +8,13 @@ use serde_json::{Value, json};
 
 use super::valid_database_name;
 use crate::db::{self, JobRow, get_instance, get_job, status};
+use crate::engine::policy::{self, LatestRun, PolicyScore};
 use crate::error::{ApiResult, AppError};
 use crate::i18n::Lang;
 use crate::odoo::BackupFormat;
 use crate::scheduler;
 use crate::state::AppState;
+use crate::storage::{Capabilities, capabilities};
 use crate::util::now;
 
 fn default_true() -> bool {
@@ -67,6 +69,7 @@ pub struct JobView {
     next_run_at: Option<DateTime<Utc>>,
     last_run_at: Option<DateTime<Utc>>,
     last_status: Option<String>,
+    policy: PolicyScore,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -88,8 +91,62 @@ macro_rules! job_select {
     };
 }
 
-fn to_view(row: JobListRow, destination_ids: Vec<i64>, lang: Lang) -> JobView {
+/// What the policy score of every job is computed from, loaded with a few queries.
+struct PolicyData {
+    destinations: HashMap<i64, Vec<i64>>,
+    capabilities: HashMap<i64, Capabilities>,
+    /// `(database, status, has warning)` of the latest finished backup per database, by job.
+    latest: HashMap<i64, Vec<(String, String, bool)>>,
+}
+
+impl PolicyData {
+    async fn load(state: &AppState) -> sqlx::Result<Self> {
+        let pairs: Vec<(i64, i64)> =
+            db::query_as("SELECT job_id, destination_id FROM job_destinations ORDER BY job_id, destination_id")
+                .fetch_all(&state.db)
+                .await?;
+        let mut destinations: HashMap<i64, Vec<i64>> = HashMap::new();
+        for (job, destination) in pairs {
+            destinations.entry(job).or_default().push(destination);
+        }
+        let rows: Vec<(i64, String, String)> =
+            db::query_as("SELECT id, kind, config_json FROM destinations").fetch_all(&state.db).await?;
+        let capabilities = rows.into_iter().map(|(id, kind, config)| (id, capabilities(&kind, &config))).collect();
+        let runs: Vec<(i64, String, String, bool)> = db::query_as(
+            "SELECT job_id, database, status, warning IS NOT NULL FROM runs WHERE id IN ( \
+               SELECT MAX(id) FROM runs WHERE job_id IS NOT NULL AND kind = 'backup' AND database != '*' \
+               AND status NOT IN ('queued', 'running', 'cancelled') GROUP BY job_id, database)",
+        )
+        .fetch_all(&state.db)
+        .await?;
+        let mut latest: HashMap<i64, Vec<(String, String, bool)>> = HashMap::new();
+        for (job, database, status, warning) in runs {
+            latest.entry(job).or_default().push((database, status, warning));
+        }
+        Ok(Self { destinations, capabilities, latest })
+    }
+
+    fn score(&self, job: &JobRow, destination_ids: &[i64]) -> PolicyScore {
+        let caps: Vec<Capabilities> =
+            destination_ids.iter().filter_map(|id| self.capabilities.get(id).copied()).collect();
+        let covered = job.databases();
+        let latest: Vec<LatestRun> = self
+            .latest
+            .get(&job.id)
+            .into_iter()
+            .flatten()
+            // Databases removed from the job no longer count.
+            .filter(|(database, _, _)| job.all_databases || covered.contains(database))
+            .map(|(_, status, warning)| LatestRun { status, has_warning: *warning })
+            .collect();
+        policy::score(&caps, job.verify_archive, &latest)
+    }
+}
+
+fn to_view(row: JobListRow, data: &PolicyData, lang: Lang) -> JobView {
     let databases = row.job.databases();
+    let destination_ids = data.destinations.get(&row.job.id).cloned().unwrap_or_default();
+    let policy = data.score(&row.job, &destination_ids);
     let j = row.job;
     JobView {
         id: j.id,
@@ -114,21 +171,10 @@ fn to_view(row: JobListRow, destination_ids: Vec<i64>, lang: Lang) -> JobView {
         next_run_at: j.next_run_at,
         last_run_at: j.last_run_at,
         last_status: row.last_status,
+        policy,
         created_at: j.created_at,
         updated_at: j.updated_at,
     }
-}
-
-async fn destinations_by_job(state: &AppState) -> sqlx::Result<HashMap<i64, Vec<i64>>> {
-    let pairs: Vec<(i64, i64)> =
-        db::query_as("SELECT job_id, destination_id FROM job_destinations ORDER BY job_id, destination_id")
-            .fetch_all(&state.db)
-            .await?;
-    let mut map: HashMap<i64, Vec<i64>> = HashMap::new();
-    for (job, destination) in pairs {
-        map.entry(job).or_default().push(destination);
-    }
-    Ok(map)
 }
 
 async fn load_view(state: &AppState, id: i64, lang: Lang) -> ApiResult<JobView> {
@@ -137,22 +183,28 @@ async fn load_view(state: &AppState, id: i64, lang: Lang) -> ApiResult<JobView> 
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| AppError::not_found("Job"))?;
-    let mut map = destinations_by_job(state).await?;
-    Ok(to_view(row, map.remove(&id).unwrap_or_default(), lang))
+    Ok(to_view(row, &PolicyData::load(state).await?, lang))
 }
 
 pub async fn list(State(state): State<AppState>, lang: Lang) -> ApiResult<Json<Vec<JobView>>> {
     let rows: Vec<JobListRow> =
         db::query_as(concat!(job_select!(), " ORDER BY LOWER(j.name), j.id")).fetch_all(&state.db).await?;
-    let mut map = destinations_by_job(&state).await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| {
-                let ids = map.remove(&r.job.id).unwrap_or_default();
-                to_view(r, ids, lang)
-            })
-            .collect(),
-    ))
+    let data = PolicyData::load(&state).await?;
+    Ok(Json(rows.into_iter().map(|r| to_view(r, &data, lang)).collect()))
+}
+
+/// `(job name, policy score)` of every job, for the metrics endpoint.
+pub(super) async fn policy_scores(state: &AppState) -> sqlx::Result<Vec<(String, PolicyScore)>> {
+    let jobs: Vec<JobRow> = db::query_as("SELECT * FROM jobs ORDER BY id").fetch_all(&state.db).await?;
+    let data = PolicyData::load(state).await?;
+    Ok(jobs
+        .into_iter()
+        .map(|job| {
+            let ids = data.destinations.get(&job.id).cloned().unwrap_or_default();
+            let score = data.score(&job, &ids);
+            (job.name, score)
+        })
+        .collect())
 }
 
 pub async fn get_one(State(state): State<AppState>, Path(id): Path<i64>, lang: Lang) -> ApiResult<Json<JobView>> {
@@ -189,12 +241,15 @@ async fn validate(state: &AppState, input: &mut JobInput) -> ApiResult<()> {
     if input.destination_ids.is_empty() {
         return Err(AppError::bad_request("Select at least one destination"));
     }
+    // Only placeholders are interpolated; the ids are bound.
+    let sql = format!("SELECT id FROM destinations WHERE id IN {}", db::placeholders(input.destination_ids.len()));
+    let mut query = db::query_scalar::<i64>(sqlx::AssertSqlSafe(sql));
     for id in &input.destination_ids {
-        let exists: i64 =
-            db::query_scalar("SELECT COUNT(*) FROM destinations WHERE id = ?").bind(id).fetch_one(&state.db).await?;
-        if exists == 0 {
-            return Err(AppError::bad_request(format!("Destination #{id} does not exist")));
-        }
+        query = query.bind(id);
+    }
+    let existing = query.fetch_all(&state.db).await?;
+    if let Some(id) = input.destination_ids.iter().find(|id| !existing.contains(id)) {
+        return Err(AppError::bad_request(format!("Destination #{id} does not exist")));
     }
     for (label, value) in [
         ("keep_last", input.keep_last),

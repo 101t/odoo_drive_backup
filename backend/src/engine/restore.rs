@@ -54,11 +54,12 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
                 Some(destination.name.clone()),
                 source_run.size_bytes.map(|s| s as u64),
             );
-            let (md5, size) = storage.download(&remote_id, &temp, progress, cancel).await?;
-            if let Some(expected) = &source_run.md5
-                && !expected.eq_ignore_ascii_case(&md5)
+            let (hashes, size) = storage.download(&remote_id, &temp, progress, cancel).await?;
+            if let Some((algorithm, expected)) =
+                hashes.mismatch(source_run.sha256.as_deref(), source_run.md5.as_deref())
             {
-                bail!("checksum mismatch: the stored backup is corrupted (expected MD5 {expected}, got {md5})");
+                let got = if algorithm == "MD5" { &hashes.md5 } else { &hashes.sha256 };
+                bail!("checksum mismatch: the stored backup is corrupted (expected {algorithm} {expected}, got {got})");
             }
             engine
                 .log(
@@ -75,6 +76,10 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
             (temp, Some(guard))
         }
     };
+
+    if let Some(warning) = version_mismatch(source_run.odoo_version.as_deref(), instance.odoo_version.as_deref()) {
+        engine.log(run.id, "warn", warning).await;
+    }
 
     // ---- upload to Odoo
     engine.set_phase(run.id, "restoring").await;
@@ -124,4 +129,40 @@ pub(super) async fn run(engine: &Arc<EngineInner>, run: &Run, cancel: &Cancellat
             .await;
     }
     Ok(Outcome::Success)
+}
+
+/// Major version of an Odoo version string: "17.0", "saas~17.2", "17.0+e" → "17".
+fn major(version: &str) -> Option<&str> {
+    let version = version.trim().trim_start_matches("saas~");
+    let major = version.split(['.', '+', '-']).next()?;
+    (!major.is_empty() && major.chars().all(|c| c.is_ascii_digit())).then_some(major)
+}
+
+/// Odoo only restores databases of its own major version (an upgrade needs the upgrade service).
+pub fn version_mismatch(backup: Option<&str>, target: Option<&str>) -> Option<String> {
+    let (backup, target) = (backup?, target?);
+    if major(backup)? == major(target)? {
+        return None;
+    }
+    Some(format!(
+        "The backup was made with Odoo {backup} but the target runs Odoo {target}: \
+         the restored database may not load without a migration"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn major_versions() {
+        assert_eq!(major("17.0"), Some("17"));
+        assert_eq!(major("saas~17.2"), Some("17"));
+        assert_eq!(major("16.0+e"), Some("16"));
+        assert_eq!(major("unknown"), None);
+        assert!(version_mismatch(Some("17.0"), Some("saas~17.4")).is_none());
+        assert!(version_mismatch(Some("16.0"), Some("17.0")).is_some());
+        assert!(version_mismatch(None, Some("17.0")).is_none());
+        assert!(version_mismatch(Some("17.0"), Some("garbage")).is_none());
+    }
 }

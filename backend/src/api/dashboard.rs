@@ -27,6 +27,8 @@ pub struct DatabaseHealth {
     last_success_at: Option<DateTime<Utc>>,
     last_run_at: Option<DateTime<Utc>>,
     last_size: Option<i64>,
+    /// The latest finished backup succeeded but its sanity check raised a warning.
+    last_warning: bool,
     protected: bool,
     stale: bool,
 }
@@ -48,8 +50,8 @@ pub async fn database_health(state: &AppState, stale_hours: i64) -> sqlx::Result
     )
     .fetch_all(&state.db)
     .await?;
-    let last: Vec<(i64, String, String, Option<i64>)> = db::query_as(
-        "SELECT instance_id, database, status, size_bytes FROM runs WHERE id IN ( \
+    let last: Vec<(i64, String, String, bool)> = db::query_as(
+        "SELECT instance_id, database, status, warning IS NOT NULL FROM runs WHERE id IN ( \
            SELECT MAX(id) FROM runs WHERE kind = 'backup' AND instance_id IS NOT NULL AND database != '*' \
            AND status NOT IN ('queued', 'running') GROUP BY instance_id, database)",
     )
@@ -85,8 +87,8 @@ pub async fn database_health(state: &AppState, stale_hours: i64) -> sqlx::Result
     }
     let stats: BTreeMap<(i64, String), RunTimes> = stats.into_iter().map(|(i, d, s, r)| ((i, d), (s, r))).collect();
     keys.extend(stats.keys().cloned());
-    let last: BTreeMap<(i64, String), (String, Option<i64>)> =
-        last.into_iter().map(|(i, d, s, size)| ((i, d), (s, size))).collect();
+    let last: BTreeMap<(i64, String), (String, bool)> =
+        last.into_iter().map(|(i, d, s, warning)| ((i, d), (s, warning))).collect();
     let success_size: BTreeMap<(i64, String), Option<i64>> =
         last_success_size.into_iter().map(|(i, d, s)| ((i, d), s)).collect();
 
@@ -106,6 +108,7 @@ pub async fn database_health(state: &AppState, stale_hours: i64) -> sqlx::Result
                 instance_name,
                 last_status: last.get(&key).map(|(s, _)| s.clone()),
                 last_size: success_size.get(&key).cloned().flatten(),
+                last_warning: last.get(&key).is_some_and(|(_, w)| *w),
                 stale: is_protected && last_success_at.is_none_or(|t| t < threshold),
                 protected: is_protected,
                 last_success_at,
@@ -130,7 +133,7 @@ pub async fn database_health(state: &AppState, stale_hours: i64) -> sqlx::Result
 }
 
 pub async fn overview(State(state): State<AppState>) -> ApiResult<Json<Value>> {
-    let settings = super::settings::load(&state).await?;
+    let settings = super::settings::load(&state.db).await?;
     let health = database_health(&state, settings.stale_after_hours).await?;
 
     let (instances, jobs, jobs_enabled, destinations): (i64, i64, i64, i64) = db::query_as(
@@ -255,7 +258,7 @@ pub async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
         return Ok((StatusCode::UNAUTHORIZED, "invalid token").into_response());
     }
 
-    let settings = super::settings::load(&state).await?;
+    let settings = super::settings::load(&state.db).await?;
     let health = database_health(&state, settings.stale_after_hours).await?;
     let mut out = String::new();
     let _ = writeln!(out, "# HELP odoo_backup_last_success_timestamp_seconds Time of the last successful backup.");
@@ -295,6 +298,22 @@ pub async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
         if h.protected {
             let _ = writeln!(out, "odoo_backup_stale{{{labels}}} {}", u8::from(h.stale));
         }
+    }
+    let _ = writeln!(out, "# HELP odoo_backup_last_run_warning 1 if the last backup raised a sanity warning.");
+    let _ = writeln!(out, "# TYPE odoo_backup_last_run_warning gauge");
+    for h in health.iter().filter(|h| h.last_status.is_some()) {
+        let _ = writeln!(
+            out,
+            "odoo_backup_last_run_warning{{instance=\"{}\",database=\"{}\"}} {}",
+            label(&h.instance_name),
+            label(&h.database),
+            u8::from(h.last_warning)
+        );
+    }
+    let _ = writeln!(out, "# HELP odoo_backup_policy_score Rules of 3-2-1-1-0 met by a job (out of 5).");
+    let _ = writeln!(out, "# TYPE odoo_backup_policy_score gauge");
+    for (job, score) in super::jobs::policy_scores(&state).await? {
+        let _ = writeln!(out, "odoo_backup_policy_score{{job=\"{}\"}} {}", label(&job), score.score);
     }
     let counts: Vec<(String, i64)> =
         db::query_as("SELECT status, COUNT(*) FROM runs WHERE kind = 'backup' GROUP BY status")

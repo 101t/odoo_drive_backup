@@ -8,7 +8,7 @@ macro_rules! run_select {
         "SELECT r.id, r.kind, r.job_id, j.name AS job_name, r.instance_id, r.instance_name, \
          r.database, r.format, r.trigger, r.status, r.phase, r.error, r.file_name, r.size_bytes, \
          r.sha256, r.md5, r.odoo_version, r.source_artifact_id, r.restore_options, r.attempt, \
-         r.created_at, r.started_at, r.finished_at \
+         r.warning, r.manifest_json, r.created_at, r.started_at, r.finished_at \
          FROM runs r LEFT JOIN jobs j ON j.id = r.job_id"
     };
 }
@@ -134,6 +134,10 @@ pub struct Run {
     pub source_artifact_id: Option<i64>,
     pub restore_options: Option<String>,
     pub attempt: i64,
+    /// Backup sanity check result: set when the backup succeeded but looks suspicious.
+    pub warning: Option<String>,
+    /// Serialized [`crate::engine::verify::VerifyReport`] of the archive.
+    pub manifest_json: Option<String>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -162,6 +166,8 @@ pub struct Artifact {
     pub stored_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub delete_reason: Option<String>,
+    /// Legal hold: never pruned by retention and cannot be deleted until unpinned.
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

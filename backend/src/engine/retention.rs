@@ -76,6 +76,7 @@ pub fn select_to_delete<Tz: TimeZone>(items: &[(i64, DateTime<Utc>)], policy: &R
 }
 
 /// Applies the job's retention policy to every destination holding backups of `database`.
+/// Pinned backups are outside the policy: never deleted, and they do not use up its slots.
 pub(super) async fn apply(engine: &Arc<EngineInner>, job: &JobRow, database: &str, run_id: i64) {
     let policy = job.retention();
     if policy.is_unlimited() {
@@ -88,7 +89,7 @@ pub(super) async fn apply(engine: &Arc<EngineInner>, job: &JobRow, database: &st
         "SELECT a.id, a.destination_id, a.remote_id, r.created_at FROM artifacts a \
          JOIN runs r ON r.id = a.run_id \
          WHERE r.job_id = ? AND r.database = ? AND r.kind = 'backup' AND a.status = ? \
-           AND a.destination_id IS NOT NULL AND a.remote_id IS NOT NULL",
+           AND a.destination_id IS NOT NULL AND a.remote_id IS NOT NULL AND a.pinned = FALSE",
     )
     .bind(job.id)
     .bind(database)

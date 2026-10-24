@@ -8,6 +8,11 @@ import { useT } from "../i18n";
 import { useToast } from "./toast";
 import { Alert, Button, Field, Input, Modal, Select, Switch } from "./ui";
 
+/** Major Odoo version: "17.0", "saas~17.2" and "17.0+e" are all "17". */
+function majorVersion(version: string): string | null {
+  return /^(?:saas~)?(\d+)/.exec(version.trim())?.[1] ?? null;
+}
+
 function defaultName(run: Run) {
   const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
   return `${run.database}_restore_${stamp}`.slice(0, 63);
@@ -121,7 +126,9 @@ export function RestoreDialog({
           hint={
             run.odoo_version &&
             target?.odoo_version &&
-            !target.odoo_version.startsWith(run.odoo_version.split(".")[0]) ? (
+            majorVersion(run.odoo_version) &&
+            majorVersion(target.odoo_version) &&
+            majorVersion(run.odoo_version) !== majorVersion(target.odoo_version) ? (
               <span className="text-amber-600">
                 {t("restore.version_mismatch", { source: run.odoo_version, target: target.odoo_version })}
               </span>

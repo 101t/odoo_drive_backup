@@ -8,7 +8,7 @@ mod instances;
 mod jobs;
 mod notifications;
 mod runs;
-mod settings;
+pub(crate) mod settings;
 
 use axum::http::{HeaderValue, header};
 use axum::routing::{delete, get, post};
@@ -50,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{id}/cancel", post(runs::cancel))
         .route("/api/artifacts/{id}", delete(runs::delete_artifact))
         .route("/api/artifacts/{id}/download", get(runs::download_artifact))
+        .route("/api/artifacts/{id}/pin", axum::routing::put(runs::pin_artifact))
         .route("/api/artifacts/{id}/restore", post(runs::restore_artifact))
         .route("/api/notifications", get(notifications::list).post(notifications::create))
         .route("/api/notifications/{id}", axum::routing::put(notifications::update).delete(notifications::remove))

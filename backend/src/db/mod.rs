@@ -693,6 +693,35 @@ mod tests {
                 .unwrap();
         assert_eq!(failed.as_deref(), Some("prod_copy"));
 
+        // Pinned artifacts (migration 0002): boolean filters behave the same on both engines.
+        for pinned in [false, true] {
+            let artifact: i64 = query_scalar(
+                "INSERT INTO artifacts (run_id, destination_name, destination_kind, status, created_at) \
+                 VALUES (?, 'Disk', 'local', 'stored', ?) RETURNING id",
+            )
+            .bind(run_ids[0])
+            .bind(ts)
+            .fetch_one(db)
+            .await
+            .unwrap();
+            query("UPDATE artifacts SET pinned = ? WHERE id = ?")
+                .bind(pinned)
+                .bind(artifact)
+                .execute(db)
+                .await
+                .unwrap();
+        }
+        let unpinned: i64 = query_scalar("SELECT COUNT(*) FROM artifacts WHERE run_id = ? AND pinned = FALSE")
+            .bind(run_ids[0])
+            .fetch_one(db)
+            .await
+            .unwrap();
+        assert_eq!(unpinned, 1);
+        let artifacts = run_artifacts(db, run_ids[0]).await.unwrap();
+        assert_eq!(artifacts.iter().map(|a| a.pinned).collect::<Vec<_>>(), [false, true]);
+        query("UPDATE runs SET warning = ? WHERE id = ?").bind("smaller").bind(run_ids[0]).execute(db).await.unwrap();
+        assert_eq!(get_run(db, run_ids[0]).await.unwrap().warning.as_deref(), Some("smaller"));
+
         let described = db.describe().await;
         assert!(described["version"].is_string() && described["size_bytes"].is_i64(), "{described}");
     }

@@ -38,6 +38,8 @@ export interface Artifact {
   stored_at: string | null;
   deleted_at: string | null;
   delete_reason: string | null;
+  /** Legal hold: never pruned by retention, cannot be deleted until unpinned. */
+  pinned: boolean;
 }
 
 export interface Run {
@@ -61,6 +63,10 @@ export interface Run {
   source_artifact_id: number | null;
   restore_options: string | null;
   attempt: number;
+  /** Set when the backup succeeded but its sanity check found something suspicious. */
+  warning: string | null;
+  /** JSON of the archive report: entries, filestore_files, dump_bytes, modules, pg_version... */
+  manifest_json: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -159,6 +165,35 @@ export interface GdriveConfig {
 export interface LocalConfig {
   path: string;
   subfolder_per_database: boolean;
+  /** The directory is on another site (network mount, removable disk taken away). */
+  off_site?: boolean;
+}
+
+export interface Capabilities {
+  hash: "md5" | "sha256";
+  medium: "disk" | "cloud";
+  off_site: boolean;
+  immutable: boolean;
+  can_delete: boolean;
+}
+
+export interface Manifest {
+  entries: number;
+  filestore_files: number;
+  dump_bytes: number;
+  odoo_version: string | null;
+  db_name: string | null;
+  pg_version: string | null;
+  modules: number | null;
+  crc_checked: boolean;
+}
+
+export type PolicyRuleId = "three_copies" | "two_media" | "one_off_site" | "one_immutable" | "zero_errors";
+
+export interface PolicyScore {
+  score: number;
+  max: number;
+  rules: { id: PolicyRuleId; ok: boolean }[];
 }
 
 export interface Destination {
@@ -169,6 +204,7 @@ export interface Destination {
   has_service_account_key: boolean;
   has_client_secret: boolean;
   connected: boolean;
+  capabilities: Capabilities;
   stored_files: number;
   stored_bytes: number;
   job_count: number;
@@ -221,6 +257,7 @@ export interface Job {
   next_run_at: string | null;
   last_run_at: string | null;
   last_status: RunStatus | null;
+  policy: PolicyScore;
   created_at: string;
   updated_at: string;
 }
@@ -233,6 +270,7 @@ export type JobInput = Omit<
   | "next_run_at"
   | "last_run_at"
   | "last_status"
+  | "policy"
   | "created_at"
   | "updated_at"
 >;
@@ -244,7 +282,7 @@ export interface CronPreview {
   next: string[];
 }
 
-export type ChannelKind = "webhook" | "telegram" | "email";
+export type ChannelKind = "webhook" | "telegram" | "email" | "heartbeat";
 
 export interface Channel {
   id: number;
@@ -277,6 +315,7 @@ export interface DatabaseHealth {
   last_success_at: string | null;
   last_run_at: string | null;
   last_size: number | null;
+  last_warning: boolean;
   protected: boolean;
   stale: boolean;
 }
@@ -303,7 +342,7 @@ export interface Dashboard {
 }
 
 export interface SettingsResponse {
-  settings: { stale_after_hours: number; log_retention_days: number };
+  settings: { stale_after_hours: number; log_retention_days: number; size_drop_warn_percent: number };
   system: {
     version: string;
     data_dir: string;

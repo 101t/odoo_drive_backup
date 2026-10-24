@@ -533,10 +533,10 @@ impl GdriveStorage {
             );
         }
         if let Some(remote_md5) = &meta.md5_checksum
-            && !remote_md5.eq_ignore_ascii_case(req.md5)
+            && !remote_md5.eq_ignore_ascii_case(&req.hashes.md5)
         {
             let _ = self.delete(&file_id).await;
-            bail!("checksum mismatch after upload: local MD5 {}, Google Drive MD5 {remote_md5}", req.md5);
+            bail!("checksum mismatch after upload: local MD5 {}, Google Drive MD5 {remote_md5}", req.hashes.md5);
         }
 
         let mut display = vec!["Google Drive".to_string()];

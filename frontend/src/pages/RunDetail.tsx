@@ -1,10 +1,10 @@
 import { clsx } from "clsx";
-import { ArrowLeft, CircleX, Download, ExternalLink, RotateCcw, Square, Trash } from "lucide-react";
+import { ArrowLeft, CircleX, Download, ExternalLink, Pin, PinOff, RotateCcw, Square, Trash, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { errorMessage } from "../api/client";
-import { useCancelRun, useDeleteArtifact, useDeleteRun, useRun } from "../api/hooks";
-import type { Artifact, RunLog } from "../api/types";
+import { useCancelRun, useDeleteArtifact, useDeleteRun, usePinArtifact, useRun } from "../api/hooks";
+import type { Artifact, Manifest, RunLog } from "../api/types";
 import { useConfirm } from "../components/confirm";
 import { RestoreDialog } from "../components/RestoreDialog";
 import { DestinationIcon, RunProgress, StatusBadge, artifactStatusLabel, deleteReasonLabel } from "../components/RunBits";
@@ -71,6 +71,15 @@ function LogView({ logs }: { logs: RunLog[] }) {
   );
 }
 
+function parseManifest(json: string | null): Manifest | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as Manifest;
+  } catch {
+    return null;
+  }
+}
+
 const artifactTone = {
   stored: "green",
   failed: "red",
@@ -87,6 +96,7 @@ export function RunDetailPage() {
   const cancel = useCancelRun();
   const deleteRun = useDeleteRun();
   const deleteArtifact = useDeleteArtifact();
+  const pinArtifact = usePinArtifact();
   const confirm = useConfirm();
   const toast = useToast();
   const navigate = useNavigate();
@@ -157,6 +167,15 @@ export function RunDetailPage() {
     }
   };
 
+  const onPin = async (artifact: Artifact) => {
+    try {
+      await pinArtifact.mutateAsync({ id: artifact.id, pinned: !artifact.pinned });
+      toast.success(artifact.pinned ? t("run_detail.unpinned") : t("run_detail.pinned"), artifact.pinned ? undefined : t("run_detail.pinned_hint"));
+    } catch (e) {
+      toast.error(t("run_detail.pin_failed"), errorMessage(e));
+    }
+  };
+
   const summary: [ReactNode, ReactNode][] = [
     [
       t("run_detail.instance"),
@@ -205,6 +224,19 @@ export function RunDetailPage() {
         {restore.neutralize && <Badge tone="blue">{t("run_detail.neutralized")}</Badge>}
       </span>,
     ]);
+  }
+  const manifest = parseManifest(run.manifest_json);
+  if (manifest) {
+    const parts =
+      manifest.entries === 0
+        ? [t("run_detail.contents_dump", { size: formatBytes(manifest.dump_bytes) })]
+        : [
+            t("run_detail.contents_dump_sql", { size: formatBytes(manifest.dump_bytes) }),
+            t("run_detail.contents_files", { count: manifest.filestore_files }),
+          ];
+    if (manifest.modules != null) parts.push(t("run_detail.contents_modules", { count: manifest.modules }));
+    if (manifest.pg_version) parts.push(`PostgreSQL ${manifest.pg_version}`);
+    summary.push([t("run_detail.contents"), parts.join(" · ")]);
   }
   if (run.file_name) summary.push([t("run_detail.file"), <Mono>{run.file_name}</Mono>]);
   if (run.sha256)
@@ -263,6 +295,14 @@ export function RunDetailPage() {
           </Alert>
         )}
 
+        {run.warning && (
+          <Alert tone="amber" icon={<TriangleAlert />} title={t("run_detail.warning")}>
+            {run.warning.split("; ").map((w) => (
+              <p key={w}>{ts(w)}</p>
+            ))}
+          </Alert>
+        )}
+
         {active && (
           <Card title={t("run_detail.progress")}>
             <RunProgress run={run} />
@@ -306,6 +346,11 @@ export function RunDetailPage() {
                             </p>
                           )}
                         </div>
+                        {a.pinned && (
+                          <Badge tone="violet">
+                            <Pin /> {t("run_detail.pinned_badge")}
+                          </Badge>
+                        )}
                         <Badge tone={artifactTone[a.status]}>
                           {artifactStatusLabel(a.status)}
                           {a.delete_reason ? ` (${deleteReasonLabel(a.delete_reason)})` : ""}
@@ -323,9 +368,14 @@ export function RunDetailPage() {
                             <IconButton label={t("run_detail.restore")} onClick={() => setRestoreFrom(a)}>
                               <RotateCcw />
                             </IconButton>
-                            <IconButton label={t("run_detail.delete_file")} tone="danger" onClick={() => onDeleteArtifact(a)}>
-                              <Trash />
+                            <IconButton label={a.pinned ? t("run_detail.unpin") : t("run_detail.pin")} onClick={() => onPin(a)}>
+                              {a.pinned ? <PinOff /> : <Pin />}
                             </IconButton>
+                            {!a.pinned && (
+                              <IconButton label={t("run_detail.delete_file")} tone="danger" onClick={() => onDeleteArtifact(a)}>
+                                <Trash />
+                              </IconButton>
+                            )}
                           </div>
                         )}
                       </li>

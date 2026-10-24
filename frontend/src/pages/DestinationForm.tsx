@@ -37,6 +37,7 @@ export function DestinationForm({
   const [keyFileName, setKeyFileName] = useState("");
   const keyFileInput = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState("/backups");
+  const [offSite, setOffSite] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
@@ -64,6 +65,7 @@ export function DestinationForm({
       setSubfolders(destination ? (destination.config as LocalConfig).subfolder_per_database : true);
     }
     setPath(destination?.kind === "local" ? (destination.config as LocalConfig).path : "/backups");
+    setOffSite(destination?.kind === "local" ? Boolean((destination.config as LocalConfig).off_site) : false);
   }, [open, destination?.id]);
 
   const origin = settings?.system.public_url ?? window.location.origin;
@@ -104,7 +106,7 @@ export function DestinationForm({
               client_secret: auth === "oauth" ? clientSecret || undefined : undefined,
             },
           }
-        : { name, kind, config: { path, subfolder_per_database: subfolders } };
+        : { name, kind, config: { path, subfolder_per_database: subfolders, off_site: offSite } };
     try {
       const saved = await save.mutateAsync({ id: destination?.id, input });
       if (needsConnect && !saved.connected) {
@@ -337,6 +339,15 @@ export function DestinationForm({
               className="font-mono"
             />
           </Field>
+        )}
+
+        {kind === "local" && (
+          <Switch
+            checked={offSite}
+            onChange={setOffSite}
+            label={t("destination_form.off_site")}
+            description={t("destination_form.off_site_hint")}
+          />
         )}
 
         <Switch

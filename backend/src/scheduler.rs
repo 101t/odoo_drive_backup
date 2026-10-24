@@ -143,12 +143,10 @@ async fn housekeeping(state: &AppState) {
     if let Err(err) = crate::auth::purge_expired_sessions(&state.db).await {
         tracing::warn!(error = %err, "session cleanup failed");
     }
-    let days: i64 = db::get_setting(&state.db, "log_retention_days")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(90);
+    let days = match crate::api::settings::load(&state.db).await {
+        Ok(settings) => settings.log_retention_days,
+        Err(_) => crate::api::settings::DEFAULT_LOG_RETENTION_DAYS,
+    };
     if days > 0 {
         let cutoff = Utc::now() - chrono::Duration::days(days);
         if let Err(err) = db::query("DELETE FROM run_logs WHERE ts < ?").bind(cutoff).execute(&state.db).await {

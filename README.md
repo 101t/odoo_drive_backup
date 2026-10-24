@@ -17,16 +17,20 @@ data in a SQLite file or in PostgreSQL.
   - Drive's MD5 is compared with the local one, so the copy is verified end to end.
   - Supports a service account in a Shared Drive (Workspace) or OAuth with a personal account (in-app
     *Connect Google account* flow).
-- **Several destinations per job** (e.g. Google Drive + NAS) for 3-2-1 backups.
+- **Several destinations per job** (e.g. Google Drive + NAS), uploaded in parallel. Each job shows a
+  **3-2-1-1-0 score** (3 copies, 2 media, 1 off-site, 1 immutable, 0 errors) with hints for what is missing.
+- **Sanity checks**: every archive's contents (dump size, filestore files, modules) are recorded and compared
+  with the previous backup. A backup that shrank suspiciously is flagged and alerted, even though it "succeeded".
 - **Schedules** with cron expressions and time zones. A run missed while the service was down is executed at startup.
 - **GFS retention**: keep the last *N*, plus *N* daily, weekly, monthly and yearly backups. Pruning is applied per
-  destination, and the newest backup is never deleted.
+  destination, and the newest backup is never deleted. **Pin** a backup (e.g. "before upgrade") to keep it forever.
 - **One-click restore** of any stored backup into a new database on any instance, with "copy" (new UUID) and
   *neutralize* options. Use it to test your backups.
 - **Live dashboard.** Database health (stale/failing detection), per-phase progress bars with throughput via
   Server-Sent Events, full logs per run, history, downloads.
-- **Alerts** through Slack/Mattermost/Google Chat/Discord webhooks, Telegram or e-mail (SMTP). Also a Prometheus
-  `/metrics` endpoint and `/api/health`.
+- **Alerts** through Slack/Mattermost/Google Chat/Discord webhooks, Telegram or e-mail (SMTP), plus **heartbeat**
+  pings to healthchecks.io / Uptime Kuma so a dead server is noticed too. Also a Prometheus `/metrics` endpoint and
+  `/api/health`.
 - **English and Arabic UI**, with a full right-to-left layout in Arabic.
 - **SQLite or PostgreSQL** for the application data: zero setup by default, or a managed PostgreSQL server.
 - **Secure by default.**
@@ -257,6 +261,9 @@ time zone:
 A backup is kept if any rule keeps it, and the newest backup is always kept. All zeros means "keep everything".
 Manual (*Back up now*) backups are never pruned automatically.
 
+**Pinned** copies (pin icon next to a stored copy in the run page) are outside the policy: retention never deletes
+them and they do not use up its slots. A pinned copy cannot be deleted until it is unpinned.
+
 ## Restore
 
 Open a run in **History**. Next to each stored copy, use **Restore…** and pick the target instance and a **new**
@@ -293,7 +300,11 @@ Every option is an environment variable (or the matching `--flag`).
 ## Monitoring
 
 - **Notifications** (Settings): on failure (default) and/or success. Webhook payloads are Slack-compatible
-  (`{"text": …}`), Discord, or generic JSON with the full run details.
+  (`{"text": …}`), Discord, or generic JSON with the full run details. Failure channels also receive backups that
+  succeeded with a sanity warning (shrank by more than the threshold in Settings, 30% by default).
+- **Heartbeat** channel (dead-man's switch): pings a [healthchecks.io](https://healthchecks.io) URL (`/fail` on
+  failure), an Uptime Kuma push monitor (`status=up|down`), or a plain URL on success only. Set the monitor's
+  period to the job schedule: if pings stop, the monitor alerts you even when this server is down.
 - **Prometheus**: set `ODB_METRICS_TOKEN` and scrape `/metrics`. Available series:
   - `odoo_backup_last_success_timestamp_seconds{instance,database}`
   - `odoo_backup_last_run_ok`
@@ -301,6 +312,8 @@ Every option is an environment variable (or the matching `--flag`).
   - `odoo_backup_last_size_bytes`
   - `odoo_backup_destination_bytes`
   - `odoo_backup_active_runs`
+  - `odoo_backup_last_run_warning{instance,database}`: 1 when the last backup raised a sanity warning
+  - `odoo_backup_policy_score{job}`: 3-2-1-1-0 rules met (0 to 5)
 
   Example alert: `time() - odoo_backup_last_success_timestamp_seconds > 26*3600`.
 - **Health**: `GET /api/health` (no authentication), or `odoo-backup healthcheck` inside the container.
@@ -404,7 +417,7 @@ All endpoints are under `/api`, return JSON, and require the session cookie exce
 | `GET, POST /jobs`, `PUT, DELETE /jobs/{id}`, `POST /jobs/{id}/run`, `POST /cron/preview` | Scheduled jobs |
 | `POST /backups` | Ad-hoc backup `{instance_id, databases, destination_ids, format}` |
 | `GET /runs?status=&instance_id=&job_id=&kind=&search=`, `GET, DELETE /runs/{id}`, `POST /runs/{id}/cancel` | History |
-| `GET /artifacts/{id}/download`, `POST /artifacts/{id}/restore`, `DELETE /artifacts/{id}` | Stored files |
+| `GET /artifacts/{id}/download`, `POST /artifacts/{id}/restore`, `PUT /artifacts/{id}/pin {pinned}`, `DELETE /artifacts/{id}` | Stored files |
 | `GET, POST /notifications`, `PUT, DELETE /notifications/{id}`, `POST /notifications/{id}/test` | Alerts |
 | `GET, PUT /settings` | Preferences and system information |
 

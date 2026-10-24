@@ -1,4 +1,4 @@
-import { Bell, Mail, Pencil, Plus, Send, Trash, Webhook } from "lucide-react";
+import { Bell, HeartPulse, Mail, Pencil, Plus, Send, Trash, Webhook } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { errorMessage } from "../api/client";
 import { useChangePassword, useChannels, useDeleteChannel, useSaveSettings, useSettings, useTestChannel } from "../api/hooks";
@@ -10,7 +10,7 @@ import { tr, ts, useT } from "../i18n";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { NotificationForm } from "./NotificationForm";
 
-const channelIcon = { webhook: <Webhook />, telegram: <Send />, email: <Mail /> };
+const channelIcon = { webhook: <Webhook />, telegram: <Send />, email: <Mail />, heartbeat: <HeartPulse /> };
 
 function Notifications() {
   const t = useT();
@@ -113,18 +113,20 @@ function General() {
   const toast = useToast();
   const [stale, setStale] = useState(26);
   const [logDays, setLogDays] = useState(90);
+  const [sizeDrop, setSizeDrop] = useState(30);
 
   useEffect(() => {
     if (data) {
       setStale(data.settings.stale_after_hours);
       setLogDays(data.settings.log_retention_days);
+      setSizeDrop(data.settings.size_drop_warn_percent);
     }
   }, [data]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await save.mutateAsync({ stale_after_hours: stale, log_retention_days: logDays });
+      await save.mutateAsync({ stale_after_hours: stale, log_retention_days: logDays, size_drop_warn_percent: sizeDrop });
       toast.success(t("settings.saved"));
     } catch (error) {
       toast.error(t("settings.save_failed"), errorMessage(error));
@@ -140,6 +142,9 @@ function General() {
           </Field>
           <Field label={t("settings.log_days")} hint={t("settings.log_days_hint")}>
             <Input type="number" min={0} max={3650} value={logDays} onChange={(e) => setLogDays(Number(e.target.value))} />
+          </Field>
+          <Field label={t("settings.size_drop")} hint={t("settings.size_drop_hint")}>
+            <Input type="number" min={0} max={99} value={sizeDrop} onChange={(e) => setSizeDrop(Number(e.target.value))} />
           </Field>
         </div>
         <Button type="submit" variant="primary" loading={save.isPending}>
