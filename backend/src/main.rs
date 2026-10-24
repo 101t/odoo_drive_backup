@@ -97,7 +97,7 @@ fn log_filter() -> EnvFilter {
 }
 
 async fn healthcheck(config: Config) -> anyhow::Result<()> {
-    let url = format!("http://127.0.0.1:{}/api/health", config.bind.port());
+    let url = format!("http://127.0.0.2:{}/api/health", config.bind.port());
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?

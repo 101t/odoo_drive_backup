@@ -103,7 +103,7 @@ Start-Service -Name $ServiceName
 $healthy = $false
 foreach ($attempt in 1..30) {
     try {
-        Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Uri "http://127.0.0.1:$port/api/health" | Out-Null
+        Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Uri "http://127.0.0.2:$port/api/health" | Out-Null
         $healthy = $true
         break
     } catch {

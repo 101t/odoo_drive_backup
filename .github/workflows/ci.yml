@@ -91,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Tag v0.0.1 -> 0.0.1, 0.0 and latest (plus the major once it is 1 or higher); main -> edge; any push -> sha-<commit>.
+      # Tag v0.0.2 -> 0.0.2, 0.0 and latest (plus the major once it is 1 or higher); main -> edge; any push -> sha-<commit>.
       - name: Image tags
         id: meta
         uses: docker/metadata-action@v6

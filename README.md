@@ -69,9 +69,9 @@ docker compose up -d --build
 open http://localhost:8080        # create the admin account on first visit
 ```
 
-Released images are published to GitHub Container Registry: `ghcr.io/101t/odoo-backup:<version>` (e.g. `0.0.1`),
+Released images are published to GitHub Container Registry: `ghcr.io/101t/odoo-backup:<version>` (e.g. `0.0.2`),
 `latest` for the newest release and `edge` for the current `main`. To run one instead of building locally, replace
-`build: .` and `image: odoo-backup:latest` in the compose file with `image: ghcr.io/101t/odoo-backup:0.0.1`.
+`build: .` and `image: odoo-backup:latest` in the compose file with `image: ghcr.io/101t/odoo-backup:0.0.2`.
 
 Then, in the UI:
 
@@ -356,7 +356,7 @@ The database tests run on SQLite, and also on PostgreSQL when `ODB_TEST_POSTGRES
 user may create databases (a throwaway database is created and dropped):
 
 ```bash
-ODB_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres cargo test db::
+ODB_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.2:5432/postgres cargo test db::
 ```
 
 ```text

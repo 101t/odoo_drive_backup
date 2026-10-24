@@ -1,6 +1,6 @@
 # Native Linux packages (deb, rpm, archlinux), built by .github/workflows/bundles.yml. From the repository root,
 # with the static binary copied to target/package/odoo-backup:
-#   ARCH=amd64 VERSION=0.0.1 nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/
+#   ARCH=amd64 VERSION=0.0.2 nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/
 name: odoo-backup
 arch: ${ARCH}
 platform: linux
