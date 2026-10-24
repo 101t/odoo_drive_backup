@@ -1,21 +1,27 @@
 import { Fragment, createElement, useSyncExternalStore, type ReactNode } from "react";
 import { ar } from "./ar";
 import { en, type MessageKey } from "./en";
+import { es } from "./es";
+import { fr } from "./fr";
+import { tr as turkish } from "./tr";
 import { translateServerText } from "./server";
 import type { Message } from "./types";
 
 export type { MessageKey } from "./en";
 export type { Message, Plural } from "./types";
 
-export type Locale = "en" | "ar";
+export type Locale = "en" | "ar" | "fr" | "tr" | "es";
 export type Catalog = Record<MessageKey, Message>;
 export type Vars = Record<string, string | number>;
 
-const catalogs: Record<Locale, Catalog> = { en, ar };
+const catalogs: Record<Locale, Catalog> = { en, ar, fr, tr: turkish, es };
 
 export const LANGUAGES: { code: Locale; name: string }[] = [
   { code: "en", name: "English" },
   { code: "ar", name: "العربية" },
+  { code: "fr", name: "Français" },
+  { code: "tr", name: "Türkçe" },
+  { code: "es", name: "Español" },
 ];
 
 const STORAGE_KEY = "odb-lang";
@@ -23,12 +29,14 @@ const STORAGE_KEY = "odb-lang";
 function detect(): Locale {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === "en" || saved === "ar") return saved;
+    const match = LANGUAGES.find((language) => language.code === saved);
+    if (match) return match.code;
   } catch {
     // storage unavailable
   }
   const preferred = (navigator.languages?.[0] ?? navigator.language ?? "en").toLowerCase();
-  return preferred === "ar" || preferred.startsWith("ar-") ? "ar" : "en";
+  const match = LANGUAGES.find(({ code }) => preferred === code || preferred.startsWith(`${code}-`));
+  return match?.code ?? "en";
 }
 
 let current: Locale = detect();
@@ -71,7 +79,7 @@ export function useLocale(): Locale {
 
 /** BCP 47 tag for `Intl` formatting. Arabic keeps Western digits, as Odoo does. */
 export function intlLocale(locale: Locale = current): string {
-  return locale === "ar" ? "ar-u-nu-latn" : "en";
+  return locale === "ar" ? "ar-u-nu-latn" : locale;
 }
 
 export function isRtl(locale: Locale = current): boolean {
@@ -123,10 +131,10 @@ export function tr(key: MessageKey, vars: Record<string, ReactNode>): ReactNode 
   );
 }
 
-/** Text produced by the server (errors, run logs, test reports) in the current locale. */
+/** Text produced by the server (errors, run logs, test reports) in the current locale; only Arabic is translated, the other languages show the English original. */
 export function ts(text: string | null | undefined): string {
   if (!text) return text ?? "";
-  return current === "en" ? text : translateServerText(text);
+  return current === "ar" ? translateServerText(text) : text;
 }
 
 /** Subscribes the component to locale changes and returns the translation helpers. */

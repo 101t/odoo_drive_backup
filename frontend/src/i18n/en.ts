@@ -1,6 +1,6 @@
 import type { Message } from "./types";
 
-/** English messages: the source catalog. Every key must also exist in `ar.ts`. */
+/** English messages: the source catalog. Every key must also exist in the other catalogs. */
 export const en = {
   // ------------------------------------------------------------ common
   "common.copy": "Copy",

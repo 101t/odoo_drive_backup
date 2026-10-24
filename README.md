@@ -1,5 +1,9 @@
 # Odoo Backup
 
+[![CI](https://github.com/101t/odoo_drive_backup/actions/workflows/ci.yml/badge.svg)](https://github.com/101t/odoo_drive_backup/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/101t/odoo_drive_backup)](https://github.com/101t/odoo_drive_backup/releases)
+
 Automated, verified backups of any number of Odoo instances to Google Drive and local/NAS storage,
 with a web dashboard. One self-contained binary (Rust + embedded React UI), one Docker image, and the application
 data in a SQLite file or in PostgreSQL.
@@ -31,7 +35,7 @@ data in a SQLite file or in PostgreSQL.
 - **Alerts** through Slack/Mattermost/Google Chat/Discord webhooks, Telegram or e-mail (SMTP), plus **heartbeat**
   pings to healthchecks.io / Uptime Kuma so a dead server is noticed too. Also a Prometheus `/metrics` endpoint and
   `/api/health`.
-- **English and Arabic UI**, with a full right-to-left layout in Arabic.
+- **Multilingual UI**: English, Arabic (full right-to-left layout), French, Turkish and Spanish.
 - **SQLite or PostgreSQL** for the application data: zero setup by default, or a managed PostgreSQL server.
 - **Secure by default.**
   - Master passwords, keys and tokens are encrypted at rest (AES-256-GCM).
@@ -185,13 +189,13 @@ Notes:
 
 ## Languages
 
-The UI is available in **English** and **Arabic** (العربية); in Arabic the whole layout is right-to-left. The
-language is detected from the browser and can be switched from the sidebar or the sign-in page; the choice is
-remembered per browser.
+The UI is available in **English**, **Arabic** (العربية), **French** (Français), **Turkish** (Türkçe) and
+**Spanish** (Español); in Arabic the whole layout is right-to-left. The language is detected from the browser and
+can be chosen from the drop-down in the sidebar or on the sign-in page; the choice is remembered per browser.
 
 Technical values (URLs, paths, database names, cron expressions, hashes) always read left to right. Run logs and
-error messages are stored in English, so they stay searchable and easy to share, and are translated when they are
-displayed. Notification messages (e-mail, chat) are sent in English.
+error messages are stored in English, so they stay searchable and easy to share. They are translated when displayed,
+for Arabic only; the other languages show them in English. Notification messages (e-mail, chat) are sent in English.
 
 ## Odoo requirements
 
@@ -365,11 +369,12 @@ backend/            Rust (Axum, SQLx, Tokio)
   src/storage/      Google Drive (resumable upload) and local destinations
   src/scheduler.rs  cron scheduling and housekeeping
 frontend/           React 19, TypeScript, Tailwind CSS 4, TanStack Query
-  src/i18n/         en.ts (source), ar.ts (typed: a missing key fails the build), server.ts (server messages)
+  src/i18n/         en.ts (source), ar.ts / fr.ts / tr.ts / es.ts (typed: a missing key fails the build), server.ts (Arabic server messages)
 ```
 
-To add a language, copy `ar.ts`, translate it, register it in `src/i18n/index.ts`, and give it a catalog of
-server messages like `server.ts`.
+To add a language, copy `fr.ts`, translate it and register it in `src/i18n/index.ts` (see
+[CONTRIBUTING.md](CONTRIBUTING.md)). Server-generated texts (run logs, API errors) are translated for Arabic only
+(`server.ts`); other languages show them in English.
 
 The release build embeds `frontend/dist` into the binary (`rust-embed`), so `make build` produces a single file
 to deploy.
@@ -421,6 +426,12 @@ All endpoints are under `/api`, return JSON, and require the session cookie exce
 | `GET, POST /notifications`, `PUT, DELETE /notifications/{id}`, `POST /notifications/{id}/test` | Alerts |
 | `GET, PUT /settings` | Preferences and system information |
 
+## Contributing
+
+Bug reports, feature requests and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first; it
+covers the development setup, the checks a pull request must pass and how to add a translation. To report a
+vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
 ## License
 
-MIT
+Released under the [MIT License](LICENSE).

@@ -17,8 +17,9 @@ import {
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
 import { useAuth, useDashboard, useLogout } from "../api/hooks";
-import { LANGUAGES, setLocale, useLocale, useT, type MessageKey } from "../i18n";
+import { LANGUAGES, setLocale, useLocale, useT, type Locale, type MessageKey } from "../i18n";
 import { useTheme, type Theme } from "../lib/theme";
+import { Select } from "./ui";
 
 const navigation: { to: string; label: MessageKey; icon: typeof Server; end?: boolean }[] = [
   { to: "/", label: "nav.dashboard", icon: LayoutDashboard, end: true },
@@ -33,29 +34,18 @@ export function LanguageSwitcher({ className }: { className?: string }) {
   const locale = useLocale();
   const t = useT();
   return (
-    <div
-      role="group"
+    <Select
       aria-label={t("layout.language")}
-      className={clsx("flex rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800", className)}
+      className={className}
+      value={locale}
+      onChange={(event) => setLocale(event.target.value as Locale)}
     >
       {LANGUAGES.map((language) => (
-        <button
-          key={language.code}
-          type="button"
-          lang={language.code}
-          aria-pressed={locale === language.code}
-          onClick={() => setLocale(language.code)}
-          className={clsx(
-            "flex flex-1 items-center justify-center rounded-md px-2 py-1 text-xs font-medium",
-            locale === language.code
-              ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-950 dark:text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",
-          )}
-        >
+        <option key={language.code} value={language.code} lang={language.code}>
           {language.name}
-        </button>
+        </option>
       ))}
-    </div>
+    </Select>
   );
 }
 
