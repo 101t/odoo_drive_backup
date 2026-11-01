@@ -16,5 +16,5 @@ Only the latest release receives security fixes.
 ## Scope
 
 Odoo Backup stores Odoo master passwords and Google credentials (encrypted at rest). Reports about credential
-handling, authentication, session management or access to backup files are especially welcome. See "Security notes"
-in the README for the design.
+handling, authentication, session management or access to backup files are especially welcome. See [Security notes](docs/guide.md#security-notes)
+for the design.

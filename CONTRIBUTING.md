@@ -25,7 +25,7 @@ make lint            # rustfmt and clippy
 make test            # cargo test and the TypeScript type-check
 ```
 
-To run the database tests against PostgreSQL as well, set `ODB_TEST_POSTGRES_URL` (see the README).
+To run the database tests against PostgreSQL as well, set `ODB_TEST_POSTGRES_URL` (see [docs/development.md](docs/development.md)).
 
 ## Pull requests
 
